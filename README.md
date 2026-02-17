@@ -1,201 +1,78 @@
-# Unitree RL Mjlab
+# Unitree RL: Advanced Posture Control & Arm Manipulation
 
+> **Note:** This repository is a heavily modified fork of the official [Unitree RL Mjlab](https://github.com/unitreerobotics/unitree_rl_mjlab) base. 
+> 
+> While the original repository provides an excellent baseline for standard locomotion (walking, running, yaw control) using MuJoCo and Isaac Lab abstractions, **this fork extends the action space and reward structure to support dynamic posture adjustments and robotic arm manipulation.**
 
-## ✳️ Overview
-Unitree RL Mjlab is a reinforcement learning project built upon the
-[mjlab](https://github.com/mujocolab/mjlab.git), using MuJoCo as its 
-physics simulation backend, currently supporting Unitree Go2, Unitree G1 and Unitree H1_2.
+## 🌟 Custom Features Added in This Fork
 
-Mjlab combines [Isaac Lab](https://github.com/isaac-sim/IsaacLab)'s proven API
-with best-in-class [MuJoCo](https://github.com/google-deepmind/mujoco_warp)
-physics to provide lightweight, modular abstractions for RL robotics research
-and sim-to-real deployment.
+Unlike standard quadruped policies that only accept planar velocity commands (v_x, v_y, omega_z), this repository introduces:
+
+* **Dynamic Torso Posture Control:** The RL policy has been modified to accept and execute commands for base height (z_height), pitch, and roll. This allows the robot to lower its profile to crawl under obstacles or tilt its chassis dynamically while moving.
+* **Integrated Robotic Arm Manipulation:** The MuJoCo XML/URDF files have been updated to include a top-mounted robotic arm. The observation and action spaces have been expanded to co-simulate and control the extra Degrees of Freedom (DoF) alongside the locomotion policy.
+* **Custom Reward Functions:** Added specific penalty and tracking terms to stabilize the quadruped's gait while shifting its Center of Mass (CoM) due to the arm's movements and extreme torso tilts.
+
+---
+
+## ✳️ Base Overview (from Original Mjlab)
+
+This project utilizes MuJoCo as its physics simulation backend. It combines Isaac Lab's proven API with best-in-class MuJoCo physics to provide lightweight, modular abstractions for RL robotics research and sim-to-real deployment. 
 
 <div align="center">
 
-| <div align="center">  MuJoCo </div>                                                                                                                                           | <div align="center"> Physical </div>                                                                                                                                               |
-|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| <div style="width:250px; height:150px; overflow:hidden;"><img src="doc/gif/g1-velocity.gif" style="width:100%; height:100%; object-fit:cover; object-position:center;"></div> | <div style="width:250px; height:150px; overflow:hidden;"><img src="doc/gif/g1-velocity-real.gif" style="width:100%; height:100%; object-fit:cover; object-position:center;"></div> |
+| Simulation (MuJoCo) | Physical Deployment |
+| :---: | :---: |
+| *[Insert your custom GIF of the dog tilting/using arm in sim here]* | *[Insert your custom GIF of the real dog here (if applicable)]* |
 
 </div>
-
 
 ## 📦 Installation and Configuration
 
-Please refer to [setup.md](doc/setup_en.md) for installation and configuration steps.
+Please refer to the original [setup.md](doc/setup_en.md) for the base environment installation and configuration steps.
 
+## 🛠️ Usage Guide: Custom Policies
 
-## 🔁 Process Overview
+### 1. Training the Posture & Arm Policy
 
-The basic workflow for using reinforcement learning to achieve motion control is:
+To train the custom policy that includes the extended posture controls (pitch, roll, height) and arm manipulation, run the following command:
 
-`Train` → `Play` → `Sim2Real`
+    python scripts/train.py Mjlab-Posture-Arm-Unitree-Go2 --env.scene.num-envs=4096
 
-- **Train**: The agent interacts with the MuJoCo simulation and optimizes policies through reward maximization.
-- **Play**: Replay trained policies to verify expected behavior.
-- **Sim2Real**: Deploy trained policies to physical Unitree robots for real-world execution.
+**Multi-GPU Training:** Scale to multiple GPUs using `--gpu-ids`:
 
+    python scripts/train.py Mjlab-Posture-Arm-Unitree-Go2 \
+      --gpu-ids 0 1 \
+      --env.scene.num-envs=4096
 
-## 🛠️ Usage Guide
+### 2. Validating the Policy in Simulation
 
-### 1. Velocity Tracking Training
+To visualize your trained posture and arm policy interacting in the MuJoCo viewer:
 
-Run the following command to train a velocity tracking policy:
+    python scripts/play.py Mjlab-Posture-Arm-Unitree-Go2 --checkpoint_file=logs/rsl_rl/go2_posture_arm/2026-xx-xx_xx-xx-xx/model_xx.pt
 
-```bash
-python scripts/train.py Mjlab-Velocity-Flat-Unitree-G1 --env.scene.num-envs=4096
-```
+*(For standard velocity or mimic training instructions on unmodified robots, please refer to `ORIGINAL_README.md`)*
 
-Multi-GPU Training: Scale to multiple GPUs using --gpu-ids:
+---
 
-```bash
-python scripts/train.py Mjlab-Velocity-Flat-Unitree-G1 \
-  --gpu-ids 0 1 \
-  --env.scene.num-envs=4096
-```
+## 🔁 Sim-to-Real Deployment
 
-- The first argument (e.g., Mjlab-Velocity-Flat-Unitree-G1) specifies the training task.
-Available velocity tracking tasks:
-  - Mjlab-Velocity-Flat-Unitree-Go2
-  - Mjlab-Velocity-Flat-Unitree-G1
-  - Mjlab-Velocity-Flat-Unitree-G1-23DOF
-  - Mjlab-Velocity-Flat-Unitree-H1_2
+The custom policies trained in this fork maintain compatibility with Unitree's Sim2Real pipeline. During training, `policy.onnx` and `policy.onnx.data` are exported. 
 
-> [!NOTE]
-> For more details, refer to the mjlab documentation:
-> [mjlab documentation](https://mujocolab.github.io/mjlab/index.html).
+To deploy to a physical robot, you must ensure your real robot's SDK is configured to accept the extended action array (locomotion + arm joints).
 
-### 2. Motion Imitation Training
+1. Power on the robot in suspended state and enter `zero-torque` mode.
+2. Press `L2 + R2` on the controller to enter `debug mode`.
+3. Connect via Ethernet (`192.168.123.222`).
+4. Place your exported `.onnx` files into your custom deploy configuration folder and compile using `CMake`.
+5. Execute the compiled control script via the appropriate network interface.
 
-Train a Unitree G1 to mimic reference motion sequences.
+*(See `ORIGINAL_README.md` for detailed compilation flags for standard Unitree robots).*
 
-<div style="margin-left: 20px;">
+## 🎉 Acknowledgements
 
-#### 2.1 Prepare Motion Files
+This extended project builds upon the incredible work of the open-source robotics community:
 
-Prepare csv motion files in mjlab/motions/g1/ and convert them to npz format:
-
-```bash
-python scripts/csv_to_npz.py \
---input-file mjlab/motions/g1/dance1_subject2.csv \
---output-name dance1_subject2.npz \
---input-fps 30 \
---output-fps 50
-```
-
-**npz files will be stored at:**：`mjlab/motions/g1/...`
-
-#### 2.2 Training
-
-After generating the NPZ file, launch imitation training:
-
-```bash
-python scripts/train.py Mjlab-Tracking-Flat-Unitree-G1 --motion_file=mjlab/motions/g1/dance1_subject2.npz --env.scene.num-envs=4096
-```
-
-</div>
-
-> [!NOTE]
-> For detailed motion imitation instructions, refer to the BeyondMimic documentation:
-> [BeyondMimic documentation](https://github.com/HybridRobotics/whole_body_tracking/blob/main/README.md#motion-preprocessing--registry-setup).
-
-#### ⚙️  Parameter Description
-- `--env.scene`: simulation scene configuration (e.g., num_envs, dt, ground type, gravity, disturbances)
-- `--env.observations`: observation space configuration (e.g., joint state, IMU, commands, etc.)
-- `--env.rewards`: reward terms used for policy optimization
-- `--env.commands`: task commands (e.g., velocity, pose, or motion targets)
-- `--env.terminations`: termination conditions for each episode
-- `--agent.seed`: random seed for reproducibility
-- `--agent.resume`: resume from the last saved checkpoint when enabled
-- `--agent.policy`: policy network architecture configuration
-- `--agent.algorithm`: reinforcement learning algorithm configuration (PPO, hyperparameters, etc.)
-
-**Training results are stored at**：`logs/rsl_rl/<robot>_(velocity | tracking)/<date_time>/model_<iteration>.pt`
-
-### 3. Simulation Validation
-
-To visualize policy behavior in MuJoCo:
-
-Velocity tracking:
-```bash
-python scripts/play.py Mjlab-Velocity-Flat-Unitree-G1 --checkpoint_file=logs/rsl_rl/g1_velocity/2026-xx-xx_xx-xx-xx/model_xx.pt
-```
-
-Motion imitation:
-```bash
-python scripts/play.py Mjlab-Tracking-Flat-Unitree-G1 --motion_file=mjlab/motions/g1/dance1_subject2.npz --checkpoint_file=logs/rsl_rl/g1_tracking/2026-xx-xx_xx-xx-xx/model_xx.pt
-```
-
-**Note**：
-
-- During training, policy.onnx and policy.onnx.data are also exported for deployment onto physical robots.
-
-**Visualization**：
-
-| Go2                              | G1                             | H1_2                               | G1_mimic                          |
-|----------------------------------|--------------------------------|------------------------------------|-----------------------------------|
-| ![go2](doc/gif/go2-velocity.gif) | ![g1](doc/gif/g1-velocity.gif) | ![h1_2](doc/gif/h1_2-velocity.gif) | ![g1_mimic](doc/gif/g1-mimic.gif) |
-
-### 4. Real Deployment
-
-Before deployment, install the required communication tools:
-- [cyclonedds](https://github.com/eclipse-cyclonedds/cyclonedds.git)
-- [unitree_sdk2](https://github.com/unitreerobotics/unitree_sdk2.git)
-
-<div style="margin-left: 20px;">
-
-#### 4.1 Power On the Robot
-Start the robot in suspended state and wait until it enters `zero-torque` mode.
-
-#### 4.2 Enable Debug Mode
-While in `zero-torque` mode, press `L2 + R2` on the controller. The robot will enter `debug mode` with joint damping enabled.
-
-#### 4.3 Connect to the Robot
-Connect your PC to the robot via Ethernet. Configure the network as:
-- Address：`192.168.123.222`
-- Netmask：`255.255.255.0`
-
-Use `ifconfig` to determine the Ethernet device name for deployment.
-
-#### 4.4 Compilation
-
-Example: Unitree G1 velocity control.
-Place `policy.onnx` and `policy.onnx.data` into: `deploy/robots/g1/config/policy/velocity/v0/exported`.
-Then compile:
-
-```bash
-cd deploy/robots/g1
-mkdir build && cd build
-cmake .. && make
-```
-
-#### 4.5 Deployment
-
-After Compilation, run：
-
-```bash
-cd deploy/robots/g1/build
-./g1_ctrl --network=enp5s0
-```
-
-**Arguments**：
-- `network`: Ethernet interface name (e.g., `enp5s0`)
-
-</div>
-
-**Deployment Results**：
-
-| Go2                                                    | G1                                                    | H1_2           | G1_mimic                                           |
-|--------------------------------------------------------|-------------------------------------------------------|----------------|----------------------------------------------------|
-| <img src="doc/gif/go2-velocity-real.gif" width="300"/> | <img src="doc/gif/g1-velocity-real.gif" width="300"/> | <img src="doc/gif/h1_2-velocity-real.gif" width="300"/> | <img src="doc/gif/g1-mimic-real.gif" width="300"/> |
-
-
-## 🎉  Acknowledgements
-
-This project would not be possible without the contributions of the following repositories:
-
-- [mjlab](https://github.com/mujocolab/mjlab.git): training and execution framework
-- [whole_body_tracking](https://github.com/HybridRobotics/whole_body_tracking.git): versatile humanoid motion tracking framework
-- [rsl_rl](https://github.com/leggedrobotics/rsl_rl.git): reinforcement learning algorithm implementation
-- [mujoco_warp](https://github.com/google-deepmind/mujoco_warp.git): GPU-accelerated rendering and simulation interface
-- [mujoco](https://github.com/google-deepmind/mujoco.git): high-fidelity rigid-body physics engine
+* **[unitree_rl_mjlab](https://github.com/unitreerobotics/unitree_rl_mjlab)**: The original baseline repository for this fork.
+* **[mjlab](https://github.com/mujocolab/mjlab.git)**: Training and execution framework.
+* **[rsl_rl](https://github.com/leggedrobotics/rsl_rl.git)**: Reinforcement learning algorithm implementation.
+* **[mujoco](https://github.com/google-deepmind/mujoco.git)**: High-fidelity rigid-body physics engine.
