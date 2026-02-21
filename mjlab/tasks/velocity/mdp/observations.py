@@ -47,7 +47,13 @@ def foot_contact_forces(env: ManagerBasedRlEnv, sensor_name: str) -> torch.Tenso
 def joint_pos_rel(
   env: ManagerBasedRlEnv, asset_cfg: SceneEntityCfg = _DEFAULT_ASSET_CFG
 ) -> torch.Tensor:
-  """The current joint positions relative to the default pose."""
   asset: Entity = env.scene[asset_cfg.name]
-  # This uses the joint_ids provided in the config to return only the joints we want
   return asset.data.joint_pos[:, asset_cfg.joint_ids] - asset.data.default_joint_pos[:, asset_cfg.joint_ids]
+
+# Go2 arm addition: Determine the velocities of the arm joints
+def joint_vel(
+  env: ManagerBasedRlEnv, asset_cfg: SceneEntityCfg = _DEFAULT_ASSET_CFG
+) -> torch.Tensor:
+  """The current joint velocities."""
+  asset: Entity = env.scene[asset_cfg.name]
+  return asset.data.joint_vel[:, asset_cfg.joint_ids]
