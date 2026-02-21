@@ -22,3 +22,8 @@ from mjlab.asset_zoo.robots.unitree_h1_2.h1_2_constants import (
 from mjlab.asset_zoo.robots.unitree_go2.go2_constants import (
   get_go2_robot_cfg as get_go2_robot_cfg,
 )
+
+# ADDED: Go2 with D1 Arm
+from mjlab.asset_zoo.robots.unitree_go2_arm.go2_arm_constants import (
+  get_go2_arm_robot_cfg as get_go2_arm_robot_cfg,
+)
