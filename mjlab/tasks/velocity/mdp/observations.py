@@ -42,3 +42,12 @@ def foot_contact_forces(env: ManagerBasedRlEnv, sensor_name: str) -> torch.Tenso
   assert sensor_data.force is not None
   forces_flat = sensor_data.force.flatten(start_dim=1)  # [B, N*3]
   return torch.sign(forces_flat) * torch.log1p(torch.abs(forces_flat))
+
+# Go2 arm addition: Determine the positions of the arm joints
+def joint_pos_rel(
+  env: ManagerBasedRlEnv, asset_cfg: SceneEntityCfg = _DEFAULT_ASSET_CFG
+) -> torch.Tensor:
+  """The current joint positions relative to the default pose."""
+  asset: Entity = env.scene[asset_cfg.name]
+  # This uses the joint_ids provided in the config to return only the joints we want
+  return asset.data.joint_pos[:, asset_cfg.joint_ids] - asset.data.default_joint_pos[:, asset_cfg.joint_ids]
