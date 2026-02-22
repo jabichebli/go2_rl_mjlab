@@ -6,7 +6,7 @@ from mjlab.asset_zoo.robots import (
 from mjlab.envs import ManagerBasedRlEnvCfg
 from mjlab.envs.mdp.actions import JointPositionActionCfg
 from mjlab.managers.termination_manager import TerminationTermCfg
-from mjlab.managers.observation_manager import ObservationTermCfg
+from mjlab.managers.observation_manager import ObservationTermCfg, ObservationGroupCfg
 from mjlab.managers.event_manager import EventTermCfg
 from mjlab.managers.scene_entity_config import SceneEntityCfg  # ADDED
 from mjlab.sensor import ContactMatch, ContactSensorCfg
@@ -61,18 +61,36 @@ def unitree_go2_arm_rough_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
   joint_pos_action = cfg.actions["joint_pos"]
   assert isinstance(joint_pos_action, JointPositionActionCfg)
   joint_pos_action.joint_names = leg_joints
+  
+# 4. OBSERVATIONS (ASYMMETRIC ACTOR-CRITIC SETUP)
+  
+  # MAKE THE STUDENT BLIND: Only look at leg joints
+  cfg.observations["policy"].terms["joint_pos"].params["asset_cfg"] = SceneEntityCfg("robot", joint_names=leg_joints)
+  cfg.observations["policy"].terms["joint_vel"].params["asset_cfg"] = SceneEntityCfg("robot", joint_names=leg_joints)
 
-  # 4. OBSERVATIONS (Feeling the arm weight/position)
-  # Fix: Use SceneEntityCfg so the simulator knows which joints to look at
-  cfg.observations["policy"].terms["arm_joint_pos"] = ObservationTermCfg(
-      func=mdp.joint_pos_rel,
-      params={"asset_cfg": SceneEntityCfg("robot", joint_names=arm_joints)}
-  )
-  cfg.observations["policy"].terms["arm_joint_vel"] = ObservationTermCfg(
-      func=mdp.joint_vel,
-      params={"asset_cfg": SceneEntityCfg("robot", joint_names=arm_joints)}
-  )
+  # BUILD THE TEACHER'S OBSERVATIONS FIRST
+  # Start with a copy of everything the Student (policy) sees
+  critic_terms = cfg.observations["policy"].terms.copy()
 
+  # Add the privileged arm information to the teacher's dictionary
+  critic_terms.update({
+      "arm_joint_pos": ObservationTermCfg(
+          func=mdp.joint_pos_rel, 
+          params={"asset_cfg": SceneEntityCfg("robot", joint_names=arm_joints)}
+      ),
+      "arm_joint_vel": ObservationTermCfg(
+          func=mdp.joint_vel, 
+          params={"asset_cfg": SceneEntityCfg("robot", joint_names=arm_joints)}
+      ),
+  })
+
+  # CREATE THE CRITIC GROUP AND PASS THE TERMS IN
+  cfg.observations["critic"] = ObservationGroupCfg(
+      terms=critic_terms,            # Passing terms directly during initialization!
+      concatenate_terms=True,
+      enable_corruption=False, 
+  )
+  
   # 5. EVENTS (Training robustness by moving the arm during training)
   cfg.events["randomize_arm_reset"] = EventTermCfg(
       func=mdp.randomize_joint_targets, 
