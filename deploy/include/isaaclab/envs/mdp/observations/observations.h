@@ -136,5 +136,22 @@ REGISTER_OBSERVATION(gait_phase)
     return obs;
 }
 
+// ADDING: For Height Tracking
+REGISTER_OBSERVATION(base_height) {
+    // Returns the actual Z-coordinate of the robot
+    return std::vector<float>{env->robot->data.root_pos_w[2]};
+}
+
+// ADDING: For Height Tracking
+REGISTER_OBSERVATION(commanded_height) {
+    float h = 0.0f;
+    if (env->command_manager->commands.count("base_velocity")) {
+        // Index 3 is where we injected the remote's height command in State_RLBase.cpp
+        h = env->command_manager->commands.at("base_velocity")->command[0][3];
+    }
+    return std::vector<float>{h};
+}
+
+
 }
 }
