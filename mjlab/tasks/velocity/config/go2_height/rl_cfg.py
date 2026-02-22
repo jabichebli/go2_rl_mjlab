@@ -34,5 +34,5 @@ def unitree_go2_height_ppo_runner_cfg() -> RslRlOnPolicyRunnerCfg:
     experiment_name="go2_height_velocity",  # EDITED
     save_interval=100,
     num_steps_per_env=24,
-    max_iterations=10001,
+    max_iterations=15001,
   )
