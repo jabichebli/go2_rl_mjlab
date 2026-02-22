@@ -57,3 +57,21 @@ def joint_vel(
   """The current joint velocities."""
   asset: Entity = env.scene[asset_cfg.name]
   return asset.data.joint_vel[:, asset_cfg.joint_ids]
+
+# Go2 height tracking addition: Get the current height of the robot's base
+def base_height(
+  env: ManagerBasedRlEnv, asset_cfg: SceneEntityCfg = _DEFAULT_ASSET_CFG
+) -> torch.Tensor:
+  """The actual z-coordinate of the robot's base."""
+  asset: Entity = env.scene[asset_cfg.name]
+  # We use unsqueeze(1) to make the shape [num_envs, 1] instead of [num_envs]
+  return asset.data.root_link_pos_w[:, 2].unsqueeze(1)
+
+# Go2 height tracking addition: Get the commanded height for the robot's base from the velocity command term
+def commanded_height(
+  env: ManagerBasedRlEnv, command_name: str
+) -> torch.Tensor:
+  """The commanded base height."""
+  command_term = env.command_manager.get_term(command_name)
+  # Extract the height command we added to velocity_command.py
+  return command_term.height_command.unsqueeze(1)

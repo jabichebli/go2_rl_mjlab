@@ -6,7 +6,6 @@ from mjlab.rl import (
   RslRlPpoAlgorithmCfg,
 )
 
-
 def unitree_go2_ppo_runner_cfg() -> RslRlOnPolicyRunnerCfg:
   """Create RL runner configuration for Unitree Go2 velocity task."""
   return RslRlOnPolicyRunnerCfg(

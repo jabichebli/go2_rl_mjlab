@@ -388,3 +388,23 @@ def stand_still(
             reward *= scale
     return reward
 
+
+# Go2 height tracking addition: Reward for tracking the commanded base height, using a Gaussian reward centered on the target height with a configurable standard deviation.
+def track_base_height(
+  env: ManagerBasedRlEnv,
+  std: float,
+  command_name: str,
+  asset_cfg: SceneEntityCfg = _DEFAULT_ASSET_CFG,
+) -> torch.Tensor:
+  """Reward for tracking the commanded base height."""
+  asset: Entity = env.scene[asset_cfg.name]
+  command_term = env.command_manager.get_term(command_name)
+  
+  target_height = command_term.height_command
+  actual_height = asset.data.root_link_pos_w[:, 2]
+  
+  # Calculate squared error
+  height_error = torch.square(target_height - actual_height)
+  
+  # Standard exponential reward decay
+  return torch.exp(-height_error / std**2)

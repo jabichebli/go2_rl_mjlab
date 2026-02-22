@@ -33,6 +33,7 @@ class UniformVelocityCommand(CommandTerm):
     self.robot: Entity = env.scene[cfg.entity_name]
 
     self.vel_command_b = torch.zeros(self.num_envs, 3, device=self.device)
+    self.height_command = torch.zeros(self.num_envs, device=self.device) # Added height command tensor to store the target height for each environment
     self.heading_target = torch.zeros(self.num_envs, device=self.device)
     self.heading_error = torch.zeros(self.num_envs, device=self.device)
     self.is_heading_env = torch.zeros(
@@ -87,6 +88,12 @@ class UniformVelocityCommand(CommandTerm):
         [root_pos, root_quat, root_lin_vel_w, root_ang_vel_b], dim=-1
       )
       self.robot.write_root_state_to_sim(root_state, init_vel_env_ids)
+    
+    # Added resampling of base height command if the range is specified in the config. This allows us to raise and lower the robot at the start of an episode, which can be useful for training robustness to different initial heights and for learning to recover from falls.
+    if self.cfg.ranges.base_height is not None:
+      self.height_command[env_ids] = torch.empty(
+        len(env_ids), device=self.device
+      ).uniform_(*self.cfg.ranges.base_height)
 
   def _update_command(self) -> None:
     if self.cfg.heading_command:
@@ -190,6 +197,7 @@ class UniformVelocityCommandCfg(CommandTermCfg):
     lin_vel_y: tuple[float, float]
     ang_vel_z: tuple[float, float]
     heading: tuple[float, float] | None = None
+    base_height: tuple[float, float] | None = None # Added base_height range so we can raise and lower the robot
 
   ranges: Ranges
 

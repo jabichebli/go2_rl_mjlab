@@ -1,4 +1,4 @@
-"""RL configuration for Unitree Go2 with Arm velocity task."""
+"""RL configuration for Unitree Go2 Height tracking task."""
 
 from mjlab.rl import (
   RslRlOnPolicyRunnerCfg,
@@ -6,9 +6,8 @@ from mjlab.rl import (
   RslRlPpoAlgorithmCfg,
 )
 
-
-def unitree_go2_arm_ppo_runner_cfg() -> RslRlOnPolicyRunnerCfg:
-  """Create RL runner configuration for Unitree Go2 with Arm velocity task."""
+def unitree_go2_height_ppo_runner_cfg() -> RslRlOnPolicyRunnerCfg:
+  """Create RL runner configuration for Unitree Go2 height task."""
   return RslRlOnPolicyRunnerCfg(
     policy=RslRlPpoActorCriticCfg(
       init_noise_std=1.0,
@@ -32,7 +31,7 @@ def unitree_go2_arm_ppo_runner_cfg() -> RslRlOnPolicyRunnerCfg:
       desired_kl=0.01,
       max_grad_norm=1.0,
     ),
-    experiment_name="go2_arm_velocity",     # EDITED
+    experiment_name="go2_height_velocity",  # EDITED
     save_interval=100,
     num_steps_per_env=24,
     max_iterations=10001,
