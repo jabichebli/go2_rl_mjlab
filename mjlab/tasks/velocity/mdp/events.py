@@ -35,9 +35,9 @@ def randomize_payload_mass(
 ):
     """Randomizes the mass of the arm's end-effector (link_6)."""
     
-    # 1. Find the MuJoCo body index
-    body_id = env.sim.model.body("link_6").id 
-    
+    # 1. Safely get the pre-calculated body ID directly from the config
+    body_id = asset_cfg.body_ids[0]
+
     # 2. Sample random payload masses (up to 500g)
     num_resets = len(env_ids)
     random_payloads = mass_range[0] + torch.rand(num_resets, device=env.device) * (mass_range[1] - mass_range[0])

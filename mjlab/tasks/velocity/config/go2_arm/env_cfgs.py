@@ -106,7 +106,7 @@ def unitree_go2_arm_rough_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
       func=mdp.randomize_payload_mass,
       mode="reset",  # Apply a new mass every time an episode restarts
       params={
-          "asset_cfg": SceneEntityCfg("robot"),
+          "asset_cfg": SceneEntityCfg("robot", body_names=["link_6"]),
           "mass_range": (0.0, 0.5) # 0 to 500 grams
       },
   )
@@ -138,10 +138,9 @@ def unitree_go2_arm_rough_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
   }
 
   # Only penalize the legs for moving/accelerating, ignore the arm
-  if "action_rate_l2" in cfg.rewards:
-      cfg.rewards["action_rate_l2"].params["asset_cfg"] = SceneEntityCfg("robot", joint_names=leg_joints)
   if "joint_acc_l2" in cfg.rewards:
       cfg.rewards["joint_acc_l2"].params["asset_cfg"] = SceneEntityCfg("robot", joint_names=leg_joints)
+
   if "joint_pos_limits" in cfg.rewards:
       cfg.rewards["joint_pos_limits"].params["asset_cfg"] = SceneEntityCfg("robot", joint_names=leg_joints)
 
