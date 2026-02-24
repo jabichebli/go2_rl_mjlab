@@ -62,31 +62,28 @@ def unitree_go2_arm_rough_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
   assert isinstance(joint_pos_action, JointPositionActionCfg)
   joint_pos_action.joint_names = leg_joints
   
-# 4. OBSERVATIONS (ASYMMETRIC ACTOR-CRITIC SETUP)
+  # 4. OBSERVATIONS
   
-  # MAKE THE STUDENT BLIND: Only look at leg joints
+  # Tell the policy to look at the legs
   cfg.observations["policy"].terms["joint_pos"].params["asset_cfg"] = SceneEntityCfg("robot", joint_names=leg_joints)
   cfg.observations["policy"].terms["joint_vel"].params["asset_cfg"] = SceneEntityCfg("robot", joint_names=leg_joints)
 
-  # BUILD THE TEACHER'S OBSERVATIONS FIRST
-  # Start with a copy of everything the Student (policy) sees
-  critic_terms = cfg.observations["policy"].terms.copy()
+  # tell the policy to look at the arm (Proactive balancing)
+  cfg.observations["policy"].terms["arm_joint_pos"] = ObservationTermCfg(
+      func=mdp.joint_pos_rel, 
+      params={"asset_cfg": SceneEntityCfg("robot", joint_names=arm_joints)}
+  )
+  cfg.observations["policy"].terms["arm_joint_vel"] = ObservationTermCfg(
+      func=mdp.joint_vel, 
+      params={"asset_cfg": SceneEntityCfg("robot", joint_names=arm_joints)}
+  )
 
-  # Add the privileged arm information to the teacher's dictionary
-  critic_terms.update({
-      "arm_joint_pos": ObservationTermCfg(
-          func=mdp.joint_pos_rel, 
-          params={"asset_cfg": SceneEntityCfg("robot", joint_names=arm_joints)}
-      ),
-      "arm_joint_vel": ObservationTermCfg(
-          func=mdp.joint_vel, 
-          params={"asset_cfg": SceneEntityCfg("robot", joint_names=arm_joints)}
-      ),
-  })
+  # Since the policy now sees everything, the critic can just copy the policy
+  critic_terms = cfg.observations["policy"].terms.copy()
 
   # CREATE THE CRITIC GROUP AND PASS THE TERMS IN
   cfg.observations["critic"] = ObservationGroupCfg(
-      terms=critic_terms,            # Passing terms directly during initialization!
+      terms=critic_terms,            
       concatenate_terms=True,
       enable_corruption=False, 
   )
@@ -103,6 +100,16 @@ def unitree_go2_arm_rough_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
       interval_range_s=(4.0, 10.0),
       params={"asset_cfg": SceneEntityCfg("robot", joint_names=arm_joints, actuator_names=arm_joints)}
   )
+  
+  # Randomize the weight the arm is holding
+  cfg.events["randomize_payload_mass"] = EventTermCfg(
+      func=mdp.randomize_payload_mass,
+      mode="reset",  # Apply a new mass every time an episode restarts
+      params={
+          "asset_cfg": SceneEntityCfg("robot"),
+          "mass_range": (0.0, 0.5) # 0 to 500 grams
+      },
+  )
 
   # 6. VIEWER & BASE CONFIG
   cfg.viewer.body_name = "base_link"
@@ -110,9 +117,8 @@ def unitree_go2_arm_rough_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
   cfg.viewer.elevation = -10.0
   cfg.events["base_com"].params["asset_cfg"].body_names = ("base_link",)
 
-  # 7. REWARDS (Identical to your original file)
+  # 7. REWARDS
   # CRITICAL: We tell the pose reward to ONLY look at leg joints. 
-  # This prevents the arm's movement from messing up the walking reward score.
   cfg.rewards["pose"].params["asset_cfg"] = SceneEntityCfg("robot", joint_names=leg_joints)
 
   cfg.rewards["pose"].params["std_standing"] = {
@@ -130,6 +136,14 @@ def unitree_go2_arm_rough_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
     r".*(FR|FL|RR|RL)_thigh_joint.*": 0.35,
     r".*(FR|FL|RR|RL)_calf_joint.*": 0.5,
   }
+
+  # Only penalize the legs for moving/accelerating, ignore the arm
+  if "action_rate_l2" in cfg.rewards:
+      cfg.rewards["action_rate_l2"].params["asset_cfg"] = SceneEntityCfg("robot", joint_names=leg_joints)
+  if "joint_acc_l2" in cfg.rewards:
+      cfg.rewards["joint_acc_l2"].params["asset_cfg"] = SceneEntityCfg("robot", joint_names=leg_joints)
+  if "joint_pos_limits" in cfg.rewards:
+      cfg.rewards["joint_pos_limits"].params["asset_cfg"] = SceneEntityCfg("robot", joint_names=leg_joints)
 
   # All other walking rewards remain untouched
   cfg.rewards["body_ang_vel"].params["asset_cfg"].body_names = ("base_link",)
