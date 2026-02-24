@@ -95,13 +95,13 @@ def unitree_go2_arm_rough_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
   cfg.events["randomize_arm_reset"] = EventTermCfg(
       func=mdp.randomize_joint_targets, 
       mode="reset",
-      params={"asset_cfg": SceneEntityCfg("robot", joint_names=arm_joints)}
+      params={"asset_cfg": SceneEntityCfg("robot", joint_names=arm_joints, actuator_names=arm_joints)}
   )
   cfg.events["randomize_arm_interval"] = EventTermCfg(
       func=mdp.randomize_joint_targets,
       mode="interval",
       interval_range_s=(4.0, 10.0),
-      params={"asset_cfg": SceneEntityCfg("robot", joint_names=arm_joints)}
+      params={"asset_cfg": SceneEntityCfg("robot", joint_names=arm_joints, actuator_names=arm_joints)}
   )
 
   # 6. VIEWER & BASE CONFIG
@@ -146,7 +146,8 @@ def unitree_go2_arm_rough_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
     cfg.episode_length_s = int(1e9)
     cfg.observations["policy"].enable_corruption = False
     cfg.events.pop("push_robot", None)
-    cfg.events.pop("randomize_arm_interval", None)
+   # cfg.events.pop("randomize_arm_interval", None)
+   # cfg.events.pop("randomize_arm_reset", None)
 
     if cfg.scene.terrain is not None and cfg.scene.terrain.terrain_generator is not None:
       cfg.scene.terrain.terrain_generator.curriculum = False

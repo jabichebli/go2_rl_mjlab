@@ -11,9 +11,11 @@ def randomize_joint_targets(
   asset = env.scene[asset_cfg.name]
   
   # Get the joint limits for the arm joints defined in the config
-  low = asset.data.joint_limits[asset_cfg.joint_ids, 0]
-  high = asset.data.joint_limits[asset_cfg.joint_ids, 1]
-  
+  # low = asset.data.joint_pos_limits[asset_cfg.joint_ids, 0]
+  # high = asset.data.joint_pos_limits[asset_cfg.joint_ids, 1]
+  low = asset.data.joint_pos_limits[0, asset_cfg.joint_ids, 0]
+  high = asset.data.joint_pos_limits[0, asset_cfg.joint_ids, 1]
+
   # Sample new random positions
   num_resets = len(env_ids)
   num_joints = len(asset_cfg.joint_ids)
