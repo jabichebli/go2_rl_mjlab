@@ -173,7 +173,7 @@ GO2_ARM_ARTICULATION = EntityArticulationInfoCfg(
     GO2_ACTUATOR_CALF,
     *D1_ACTUATORS,
   ),
-  soft_joint_pos_limit_factor=0.9,
+  soft_joint_pos_limit_factor=0.95,
 )
 
 def get_go2_arm_robot_cfg() -> EntityCfg:
