@@ -23,7 +23,7 @@ def unitree_go2_arm_rough_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
 
   # Helper variables for grouping
   leg_joints = [".*hip_joint", ".*thigh_joint", ".*calf_joint"]
-  arm_joints = ["joint[1-6]"] # D1 Arm joints
+  arm_joints = ["joint[1-6]", "left_finger"] # D1 Arm joints
 
   foot_names = ("FR", "FL", "RR", "RL")
   site_names = ("FR", "FL", "RR", "RL")
@@ -89,15 +89,27 @@ def unitree_go2_arm_rough_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
   )
   
   # 5. EVENTS (Training robustness by moving the arm during training)
-  cfg.events["randomize_arm_reset"] = EventTermCfg(
-      func=mdp.randomize_joint_targets, 
+  # cfg.events["randomize_arm_reset"] = EventTermCfg(
+  #     func=mdp.randomize_joint_targets, 
+  #     mode="reset",
+  #     params={"asset_cfg": SceneEntityCfg("robot", joint_names=arm_joints, actuator_names=arm_joints)}
+  # )
+  # cfg.events["randomize_arm_interval"] = EventTermCfg(
+  #     func=mdp.randomize_joint_targets,
+  #     mode="interval",
+  #     interval_range_s=(4.0, 10.0),
+  #     params={"asset_cfg": SceneEntityCfg("robot", joint_names=arm_joints, actuator_names=arm_joints)}
+  # )
+  cfg.events["reset_arm_pose"] = EventTermCfg(
+      func=mdp.reset_arm_to_folded,
       mode="reset",
       params={"asset_cfg": SceneEntityCfg("robot", joint_names=arm_joints, actuator_names=arm_joints)}
   )
-  cfg.events["randomize_arm_interval"] = EventTermCfg(
-      func=mdp.randomize_joint_targets,
+
+  cfg.events["smooth_arm_movement"] = EventTermCfg(
+      func=mdp.smooth_randomize_arm_targets,
       mode="interval",
-      interval_range_s=(4.0, 10.0),
+      interval_range_s=(0.2, 0.5),
       params={"asset_cfg": SceneEntityCfg("robot", joint_names=arm_joints, actuator_names=arm_joints)}
   )
   
