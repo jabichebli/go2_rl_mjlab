@@ -1,4 +1,19 @@
 """Unitree Go2 with D1 Arm constants.
+
+NOTE ON D1 ARM INERTIA AND CONTROL TUNING:
+The <inertial> tags in a URDF define the link inertias (the physical mass 
+and weight distribution of the metal/plastic arm pieces). However, the 
+EFFECTIVE_INERTIAS used in the mjlab actuator configurations represent the 
+reflected rotor inertia of the motors (calculated as J_eff = J_rotor * N^2, 
+where N is the gear ratio). In highly geared robotic arms, the motor's 
+reflected inertia drastically dominates the physical link inertia.
+
+Since Unitree doesn't publicly publish the exact J_rotor and gear ratios 
+for the D1 motors, the EFFECTIVE_INERTIAS below are reverse-calculated. 
+By targeting a natural frequency of 4 Hz (standard for this size arm) 
+and critical damping (zeta = 1.0), the effective inertias were derived to 
+perfectly output the Kp ~= 20 stiffness known to safely hold the arm 
+up against gravity.
 """
 
 import math
@@ -63,43 +78,20 @@ GO2_ACTUATOR_CALF = BuiltinPositionActuatorCfg(
 )
 
 # --- D1 ARM ACTUATORS (Physics-based tuning via YAM protocol) ---
-# D1_NATURAL_FREQ = 4.0 * 2 * math.pi
-# D1_DAMPING_RATIO = 1.0
+D1_NATURAL_FREQ = 4.0 * 2 * math.pi
+D1_DAMPING_RATIO = 1.0
 
-# # Reverse-derived to achieve Kp~20 for the base and Kp~15 for wrists
-# D1_EFFECTIVE_INERTIAS = {
-#   "joint1": 0.0316,
-#   "joint2": 0.0316,
-#   "joint3": 0.0237,
-#   "joint4": 0.0237,
-#   "joint5": 0.0237,
-#   "joint6": 0.0237,
-#   "left_finger": 0.0316,
-# }
+# Reverse-derived to achieve Kp~20 for the base and Kp~15 for wrists
+D1_EFFECTIVE_INERTIAS = {
+  "joint1": 0.0316,
+  "joint2": 0.0316,
+  "joint3": 0.0237,
+  "joint4": 0.0237,
+  "joint5": 0.0237,
+  "joint6": 0.0237,
+  "left_finger": 0.0316,
+}
 
-# D1_EFFORT_LIMITS = {
-#   "joint1": 3.3,
-#   "joint2": 3.3,
-#   "joint3": 1.7,
-#   "joint4": 1.7,
-#   "joint5": 1.7,
-#   "joint6": 1.7,
-#   "left_finger": 1.7,
-# }
-
-# D1_ACTUATORS = [
-#   BuiltinPositionActuatorCfg(
-#     target_names_expr=(name,),
-#     stiffness=D1_EFFECTIVE_INERTIAS[name] * D1_NATURAL_FREQ**2,
-#     damping=2.0 * D1_DAMPING_RATIO * D1_EFFECTIVE_INERTIAS[name] * D1_NATURAL_FREQ,
-#     effort_limit=D1_EFFORT_LIMITS[name],
-#     armature=0.01,
-#   )
-#   for name in D1_EFFECTIVE_INERTIAS.keys()
-# ]
-
-
-# --- D1 ARM ACTUATORS (Direct Positional Control) ---
 D1_EFFORT_LIMITS = {
   "joint1": 3.3,
   "joint2": 3.3,
@@ -113,13 +105,14 @@ D1_EFFORT_LIMITS = {
 D1_ACTUATORS = [
   BuiltinPositionActuatorCfg(
     target_names_expr=(name,),
-    stiffness=20.0,  # <-- Kp - self tuned
-    damping=5.0,     # <-- Kd - self tuned
+    stiffness=D1_EFFECTIVE_INERTIAS[name] * D1_NATURAL_FREQ**2,
+    damping=2.0 * D1_DAMPING_RATIO * D1_EFFECTIVE_INERTIAS[name] * D1_NATURAL_FREQ,
     effort_limit=D1_EFFORT_LIMITS[name],
     armature=0.01,
   )
-  for name in D1_EFFORT_LIMITS.keys()
+  for name in D1_EFFECTIVE_INERTIAS.keys()
 ]
+
 
 ##
 # Keyframes.
@@ -134,8 +127,8 @@ INIT_STATE = EntityCfg.InitialStateCfg(
     ".*L_hip_joint": -0.1,
     # D1 Arm Folded Pose
     "joint1": 0.0,
-    "joint2": -1.5,
-    "joint3": 1.5,
+    "joint2": 1.5,
+    "joint3": -1.5,
     "joint4": 0.0,
     "joint5": 0.0,
     "joint6": 0.0,
@@ -209,54 +202,15 @@ for a in GO2_ARM_ARTICULATION.actuators:
 
 
 if __name__ == "__main__":
-  import mujoco
-  import mujoco.viewer
+  import mujoco.viewer as viewer
   from mjlab.entity.entity import Entity
 
   robot = Entity(get_go2_arm_robot_cfg())
   
+  # Print the generated action scales for verification before launch
   print("--- Generated Action Scales ---")
   for joint, scale in GO2_ARM_ACTION_SCALE.items():
       print(f"{joint}: {scale:.4f} rads")
   print("-------------------------------")
 
-  # Add a floor
-  robot.spec.worldbody.add_geom(
-      type=mujoco.mjtGeom.mjGEOM_PLANE, 
-      size=[5, 5, 0.1],
-      rgba=[0.3, 0.3, 0.3, 1]
-  )
-  
-  model = robot.spec.compile()
-  data = mujoco.MjData(model)
-
-  # --- SET INITIAL POSE BEFORE THE LOOP ---
-  # This sets the folded pose once, allowing you to change it later in the UI
-  for i in range(model.nu):
-      actuator_name = mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_ACTUATOR, i)
-      if not actuator_name: 
-          continue
-      
-      if "joint2" in actuator_name:
-          data.ctrl[i] = -1.5
-      elif "joint3" in actuator_name:
-          data.ctrl[i] = 1.5
-      else:
-          data.ctrl[i] = 0.0
-
-  print("\n--- Interactive Arm Tuning Rig ---")
-  print("Look at the right-hand panel in the MuJoCo viewer.")
-  print("Expand 'Control' and use the sliders to drive the arm!")
-
-  # Launch the viewer
-  with mujoco.viewer.launch_passive(model, data) as viewer:
-      while viewer.is_running():
-          # Pin the dog's base in mid-air
-          data.qpos[0:3] = [0.0, 0.0, 0.6]       
-          data.qpos[3:7] = [1.0, 0.0, 0.0, 0.0]  
-          
-          # Notice we removed the data.ctrl overrides here!
-          # Now the MuJoCo UI has full control.
-          
-          mujoco.mj_step(model, data)
-          viewer.sync()
+  viewer.launch(robot.spec.compile())

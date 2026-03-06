@@ -23,7 +23,7 @@ def unitree_go2_arm_rough_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
 
   # Helper variables for grouping
   leg_joints = [".*hip_joint", ".*thigh_joint", ".*calf_joint"]
-  arm_joints = ["joint[1-6]"] # D1 Arm joints
+  arm_joints = ["joint[1-6]", "left_finger"] # D1 Arm joints
 
   foot_names = ("FR", "FL", "RR", "RL")
   site_names = ("FR", "FL", "RR", "RL")
@@ -89,25 +89,45 @@ def unitree_go2_arm_rough_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
   )
   
   # 5. EVENTS (Training robustness by moving the arm during training)
-  cfg.events["randomize_arm_reset"] = EventTermCfg(
-      func=mdp.randomize_joint_targets, 
+  # cfg.events["randomize_arm_reset"] = EventTermCfg(
+  #     func=mdp.randomize_joint_targets, 
+  #     mode="reset",
+  #     params={"asset_cfg": SceneEntityCfg("robot", joint_names=arm_joints, actuator_names=arm_joints)}
+  # )
+  # cfg.events["randomize_arm_interval"] = EventTermCfg(
+  #     func=mdp.randomize_joint_targets,
+  #     mode="interval",
+  #     interval_range_s=(4.0, 10.0),
+  #     params={"asset_cfg": SceneEntityCfg("robot", joint_names=arm_joints, actuator_names=arm_joints)}
+  # )
+  cfg.events["reset_arm_pose"] = EventTermCfg(
+      func=mdp.reset_arm_to_folded,
       mode="reset",
       params={"asset_cfg": SceneEntityCfg("robot", joint_names=arm_joints, actuator_names=arm_joints)}
   )
-  cfg.events["randomize_arm_interval"] = EventTermCfg(
-      func=mdp.randomize_joint_targets,
-      mode="interval",
-      interval_range_s=(4.0, 10.0),
+
+  # cfg.events["smooth_arm_movement"] = EventTermCfg(
+  #     func=mdp.smooth_randomize_arm_targets,
+  #     mode="interval",
+  #     interval_range_s=(0.2, 0.5),
+  #     params={"asset_cfg": SceneEntityCfg("robot", joint_names=arm_joints, actuator_names=arm_joints)}
+  # )
+
+  # Add the new EXTREME arm sweep (coordinated poses, not random joints!)
+  cfg.events["move_arm_smoothly"] = EventTermCfg(
+      func=mdp.extreme_arm_sweep,  # NEW: Uses coordinated extreme poses
+      mode="step",                 # Runs every simulation step
       params={"asset_cfg": SceneEntityCfg("robot", joint_names=arm_joints, actuator_names=arm_joints)}
   )
   
-  # Randomize the weight the arm is holding
+  # Randomize the weight the arm is holding (ENABLED - overlaps with arm curriculum)
+  # Phase 3: 10k-15k iterations, overlaps with arm phase (7.5k-12.5k)
   cfg.events["randomize_payload_mass"] = EventTermCfg(
       func=mdp.randomize_payload_mass,
-      mode="reset",  # Apply a new mass every time an episode restarts
+      mode="reset",  # Apply a new random mass every episode restart
       params={
           "asset_cfg": SceneEntityCfg("robot", body_names=["link_6"]),
-          "mass_range": (0.0, 0.5) # 0 to 500 grams
+          "mass_range": (0.0, 0.5)  # 0 to 500 grams (curriculum controls max)
       },
   )
 
