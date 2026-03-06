@@ -147,7 +147,7 @@ def extreme_arm_sweep(
     #
     # REALISTIC SPEEDS for a robot arm:
     #   - Slow (2500 steps / 50s): Very careful, deliberate movements
-    #   - Medium (1500 steps / 30s): Normal operation  
+    #   - Medium (1750 steps / 35s): Normal operation  
     #   - Fast (1000 steps / 20s): Quick but achievable
     #
     # CURRICULUM also affects speed:
@@ -158,10 +158,13 @@ def extreme_arm_sweep(
     SLOWEST_TRANSITION = 2500  # 50 seconds (very slow, safe)
     FASTEST_TRANSITION = 1000  # 20 seconds (fast but realistic)
     
+    # FIXED segment duration - never changes, prevents teleportation when curriculum changes
+    SEGMENT_DURATION = 1750  # Fixed midpoint - segment boundaries stay constant
+    
     # During curriculum ramp, start with slow-only and gradually allow faster
-    # scale=0.0 -> only slow (500 steps)
-    # scale=0.5 -> medium range (350-500 steps)  
-    # scale=1.0 -> full range (200-500 steps)
+    # scale=0.0 -> only slow (2500 steps)
+    # scale=0.5 -> medium range (1750-2500 steps)  
+    # scale=1.0 -> full range (1000-2500 steps)
     MIN_TRANSITION_STEPS = int(SLOWEST_TRANSITION - (SLOWEST_TRANSITION - FASTEST_TRANSITION) * scale)
     MAX_TRANSITION_STEPS = SLOWEST_TRANSITION
     
@@ -170,31 +173,32 @@ def extreme_arm_sweep(
     transition_steps = MIN_TRANSITION_STEPS + (MAX_TRANSITION_STEPS - MIN_TRANSITION_STEPS) * speed_hash
     transition_steps = transition_steps.long()  # Per-env transition duration
     
-    # Also vary speed per-SEGMENT (so same env changes speed over time)
-    # This adds another layer of unpredictability
-    segment_speed_base = ((env_ids * 6271) % 1000).float() / 1000.0
-    
     # === DESYNCHRONIZATION ===
     # Each environment gets a unique time offset so they don't all move together
-    time_offsets = (env_ids * 7919) % (MAX_TRANSITION_STEPS * num_poses)
+    time_offsets = (env_ids * 7919) % (SEGMENT_DURATION * num_poses)
     adjusted_steps = current_step + time_offsets
     
-    # Which transition segment we're in (use average speed for segment boundaries)
-    # The actual interpolation speed varies, but segment counting stays stable
-    AVG_TRANSITION = (MIN_TRANSITION_STEPS + MAX_TRANSITION_STEPS) // 2
-    segment_idx = adjusted_steps // AVG_TRANSITION
+    # Which transition segment we're in
+    # CRITICAL: Use FIXED segment duration to prevent teleportation when curriculum changes!
+    segment_idx = adjusted_steps // SEGMENT_DURATION
     
-    # Per-segment speed variation (0.85 to 1.15x of base speed - less extreme variation)
+    # Per-segment speed variation (0.85 to 1.15x of base speed)
     segment_speed_hash = ((env_ids * 6271 + segment_idx * 3571) % 1000).float() / 1000.0
     segment_speed_factor = 0.85 + segment_speed_hash * 0.30  # 0.85 to 1.15
     
     # Effective transition steps for THIS segment
     effective_transition = (transition_steps.float() / segment_speed_factor).long()
-    effective_transition = torch.clamp(effective_transition, 1000, 2500)
+    effective_transition = torch.clamp(effective_transition, FASTEST_TRANSITION, SLOWEST_TRANSITION)
     
-    # Progress within current transition (0.0 to 1.0)
-    progress = (adjusted_steps % AVG_TRANSITION).float() / effective_transition.float()
-    progress = torch.clamp(progress, 0.0, 1.0)  # Ensure valid range
+    # Progress within current segment
+    # Use SEGMENT_DURATION for boundaries to ensure smooth transitions
+    steps_in_segment = adjusted_steps % SEGMENT_DURATION
+    
+    # Scale progress based on effective_transition vs segment_duration
+    # If effective_transition < SEGMENT_DURATION: arm reaches target early, holds
+    # If effective_transition > SEGMENT_DURATION: arm doesn't fully reach (rare due to clamp)
+    progress = steps_in_segment.float() / effective_transition.float()
+    progress = torch.clamp(progress, 0.0, 1.0)  # Clamp ensures no overshoot
     
     # Smooth interpolation using cosine ease-in-out (same as test_sweep.py)
     smooth_progress = (1.0 - torch.cos(progress * math.pi)) / 2.0
