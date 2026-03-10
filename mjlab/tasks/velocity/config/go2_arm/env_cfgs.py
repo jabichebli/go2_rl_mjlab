@@ -188,7 +188,7 @@ def unitree_go2_arm_rough_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
     # Override arm curriculum to use full scale during play
     # Speed up arm movement 20x for better visualization (~1.75s per pose transition)
     if "move_arm_smoothly" in cfg.events:
-      cfg.events["move_arm_smoothly"].params["scale_override"] = 0.5  # 0.0=folded, 0.1=slight, 1.0=full
+      cfg.events["move_arm_smoothly"].params["scale_override"] = 0.0  # 0.0=folded, 0.1=slight, 1.0=full
       cfg.events["move_arm_smoothly"].params["speed_multiplier"] = 1.0
 
     if cfg.scene.terrain is not None and cfg.scene.terrain.terrain_generator is not None:

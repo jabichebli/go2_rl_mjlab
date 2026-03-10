@@ -19,7 +19,7 @@
         <geom type="mesh" contype="0" conaffinity="0" density="0" group="2" material="black"/>
       </default>
       <default class="d1_collision">
-        <geom group="3" type="mesh"/>
+        <geom group="3" type="mesh" contype="0" conaffinity="0"/>
       </default>
       <default class="finger">
         <joint type="slide"/>
