@@ -35,5 +35,5 @@ def unitree_go2_arm_ppo_runner_cfg() -> RslRlOnPolicyRunnerCfg:
     experiment_name="go2_arm_velocity",     # EDITED
     save_interval=200,
     num_steps_per_env=24,
-    max_iterations=17001,
+    max_iterations=25001,  # Extended for new curriculum (arm 10k-17.5k, weight 17.5k-22.5k)
   )

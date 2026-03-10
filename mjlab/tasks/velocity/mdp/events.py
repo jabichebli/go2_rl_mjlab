@@ -7,7 +7,9 @@ from mjlab.managers.scene_entity_config import SceneEntityCfg
 def extreme_arm_sweep(
     env: ManagerBasedRlEnv, 
     env_ids: torch.Tensor, 
-    asset_cfg: SceneEntityCfg
+    asset_cfg: SceneEntityCfg,
+    scale_override: float | None = None,
+    speed_multiplier: float = 1.0
 ):
     """
     Creates EXTREME, RANDOM arm movements using coordinated poses.
@@ -26,6 +28,12 @@ def extreme_arm_sweep(
     - J4 (idx 4): Wrist Pitch
     - J5 (idx 5): Wrist Yaw
     - Gripper (idx 6): Finger
+    
+    Args:
+        scale_override: If provided, bypasses curriculum and uses this scale directly.
+                       Set to 1.0 in play mode to see full arm range.
+        speed_multiplier: Multiplier for arm movement speed. Default 1.0 for training.
+                         Set to 4.0 in play mode for faster, more visible movements.
     """
     
     # === CURRICULUM LEARNING ===
@@ -35,21 +43,23 @@ def extreme_arm_sweep(
     # Assuming 24 steps per iteration (your env config)
     current_step = env.common_step_counter
     
-    START_ITER = 7500
-    FULL_ITER = 12500
+    START_ITER = 10000
+    FULL_ITER = 17500
     STEPS_PER_ITER = 24
     
     start_step = START_ITER * STEPS_PER_ITER   # 180,000 steps
     full_step = FULL_ITER * STEPS_PER_ITER     # 300,000 steps
     
     # Calculate scale: 0.0 before start, ramps to 1.0 at full
-    if current_step < start_step:
+    if scale_override is not None:
+        scale = scale_override
+    elif current_step < start_step:
         scale = 0.0
     else:
         scale = min(1.0, (current_step - start_step) / (full_step - start_step))
     
     asset = env.scene[asset_cfg.name]
-    actuator_ids = asset_cfg.actuator_ids
+    joint_ids = asset_cfg.joint_ids  # Used for writing targets
     num_envs = len(env_ids)
     
     # === EXTREME POSES (from test_sweep.py - these create maximum torque!) ===
@@ -57,7 +67,7 @@ def extreme_arm_sweep(
     # These are the poses that make the robot work hardest to balance
     
     poses = torch.tensor([
-        # 0: Tucked (safe neutral) - arm folded against body
+        # 0: Tucked (safe neutral) - arm folded back against body
         [0.0, -1.5, 1.5, 0.0, 0.0, 0.0, 0.0],
         
         # === FULL FORWARD EXTENDED (J1=90°, J2=-90°) ===
@@ -112,17 +122,16 @@ def extreme_arm_sweep(
         # 19: Forward right + wrist bent
         [2.3, 1.571, -1.571, 0.0, 1.571, 0.0, 0.0],
         
-        # === GROUND-REACHING (arm extended downward - maximum low torque) ===
-        # J1=90° (forward), J2=0° (elbow partially bent down)
-        # These reach toward ground but DON'T touch it
-        # 20: Ground reach left
+        # === GROUND-REACHING (arm extended downward toward floor) ===
+        # J1=90° forward, J2=0° (elbow straight down)
+        # 20: Ground reach center
+        [0.0, 1.571, 0.0, 0.0, 0.0, 0.0, 0.0],
+        # 21: Ground reach left
         [-2.3, 1.571, 0.0, 0.0, 0.0, 0.0, 0.0],
-        # 21: Ground reach right  
+        # 22: Ground reach right
         [2.3, 1.571, 0.0, 0.0, 0.0, 0.0, 0.0],
-        # 22: Ground reach center-left (J0=-1.5, not full left to avoid body collision)
-        [-1.5, 1.571, 0.0, 0.0, 0.0, 0.0, 0.0],
-        # 23: Ground reach center-right
-        [1.5, 1.571, 0.0, 0.0, 0.0, 0.0, 0.0],
+        # 23: Ground reach center with wrist
+        [0.0, 1.571, 0.0, 0.0, 1.571, 0.0, 0.0],
         
         # === DIAGONAL EXTREMES (from test_sweep.py) ===
         # These create complex off-axis torques
@@ -154,53 +163,39 @@ def extreme_arm_sweep(
     #   - Early in Phase 2: ONLY slow movements allowed
     #   - Later in Phase 2: Full speed range unlocked
     
-    # Base range (will be modified by curriculum)
-    SLOWEST_TRANSITION = 2500  # 50 seconds (very slow, safe)
-    FASTEST_TRANSITION = 1000  # 20 seconds (fast but realistic)
+    # Base range (will be modified by curriculum and speed_multiplier)
+    # At speed_multiplier=1.0: 35 seconds per pose (training)
+    # At speed_multiplier=4.0: ~8.75 seconds per pose (play/demo)
+    # 
+    # SIMPLIFIED: transition time = segment duration = continuous motion, no holding!
+    SEGMENT_DURATION = int(1750 / speed_multiplier)
     
-    # FIXED segment duration - never changes, prevents teleportation when curriculum changes
-    SEGMENT_DURATION = 1750  # Fixed midpoint - segment boundaries stay constant
-    
-    # During curriculum ramp, start with slow-only and gradually allow faster
-    # scale=0.0 -> only slow (2500 steps)
-    # scale=0.5 -> medium range (1750-2500 steps)  
-    # scale=1.0 -> full range (1000-2500 steps)
-    MIN_TRANSITION_STEPS = int(SLOWEST_TRANSITION - (SLOWEST_TRANSITION - FASTEST_TRANSITION) * scale)
-    MAX_TRANSITION_STEPS = SLOWEST_TRANSITION
-    
-    # Deterministic per-env speed (hash env_id to get consistent speed per robot)
-    speed_hash = ((env_ids * 7127 + 2731) % 1000).float() / 1000.0  # 0.0 to 1.0
-    transition_steps = MIN_TRANSITION_STEPS + (MAX_TRANSITION_STEPS - MIN_TRANSITION_STEPS) * speed_hash
-    transition_steps = transition_steps.long()  # Per-env transition duration
+    # === PERSISTENT RANDOM STATE ===
+    # Created once per session. Ensures:
+    # 1. Different play sessions see different arm sequences (not deterministic on env_id)
+    # 2. Training still has full diversity across environments
+    # 3. Reproducible within a session (same random seed → same offsets)
+    if not hasattr(env, '_arm_sweep_state'):
+        env._arm_sweep_state = {
+            'time_offsets': torch.randint(
+                0, SEGMENT_DURATION * num_poses,
+                (env.num_envs,), device=env.device
+            ),
+        }
     
     # === DESYNCHRONIZATION ===
-    # Each environment gets a unique time offset so they don't all move together
-    time_offsets = (env_ids * 7919) % (SEGMENT_DURATION * num_poses)
+    # Random offsets ensure each env AND each play session gets a unique sequence
+    time_offsets = env._arm_sweep_state['time_offsets'][env_ids]
     adjusted_steps = current_step + time_offsets
     
     # Which transition segment we're in
-    # CRITICAL: Use FIXED segment duration to prevent teleportation when curriculum changes!
     segment_idx = adjusted_steps // SEGMENT_DURATION
     
-    # Per-segment speed variation (0.85 to 1.15x of base speed)
-    segment_speed_hash = ((env_ids * 6271 + segment_idx * 3571) % 1000).float() / 1000.0
-    segment_speed_factor = 0.85 + segment_speed_hash * 0.30  # 0.85 to 1.15
-    
-    # Effective transition steps for THIS segment
-    effective_transition = (transition_steps.float() / segment_speed_factor).long()
-    effective_transition = torch.clamp(effective_transition, FASTEST_TRANSITION, SLOWEST_TRANSITION)
-    
-    # Progress within current segment
-    # Use SEGMENT_DURATION for boundaries to ensure smooth transitions
+    # Progress within current segment - ALWAYS 0→1 over the full segment (continuous motion!)
     steps_in_segment = adjusted_steps % SEGMENT_DURATION
+    progress = steps_in_segment.float() / float(SEGMENT_DURATION)
     
-    # Scale progress based on effective_transition vs segment_duration
-    # If effective_transition < SEGMENT_DURATION: arm reaches target early, holds
-    # If effective_transition > SEGMENT_DURATION: arm doesn't fully reach (rare due to clamp)
-    progress = steps_in_segment.float() / effective_transition.float()
-    progress = torch.clamp(progress, 0.0, 1.0)  # Clamp ensures no overshoot
-    
-    # Smooth interpolation using cosine ease-in-out (same as test_sweep.py)
+    # Smooth interpolation using cosine ease-in-out
     smooth_progress = (1.0 - torch.cos(progress * math.pi)) / 2.0
     
     # === PSEUDO-RANDOM POSE SELECTION ===
@@ -225,8 +220,11 @@ def extreme_arm_sweep(
         tucked = poses[0].unsqueeze(0).expand(num_envs, -1)
         targets = tucked + (targets - tucked) * scale
     
-    # Write to actuators
-    env.sim.data.ctrl[env_ids[:, None], actuator_ids] = targets
+    # FIX: Write to joint_pos_target instead of ctrl!
+    # The ctrl gets overwritten by write_data_to_sim() which reads from joint_pos_target.
+    # We must set joint_pos_target for the arm joints so apply_controls() uses our values.
+    joint_ids = asset_cfg.joint_ids
+    asset.data.joint_pos_target[env_ids[:, None], joint_ids] = targets
 
 
 def randomize_joint_targets(
@@ -247,10 +245,9 @@ def randomize_joint_targets(
   num_joints = len(asset_cfg.joint_ids)
   new_targets = low + torch.rand((num_resets, num_joints), device=env.device) * (high - low)
   
-  # Write the targets directly to the simulator's control registers
-  # This moves the arm without the RL policy knowing or caring
-  actuator_ids = asset_cfg.actuator_ids
-  env.sim.data.ctrl[env_ids[:, None], actuator_ids] = new_targets
+  # FIX: Write to joint_pos_target so it doesn't get overwritten by apply_controls()
+  joint_ids = asset_cfg.joint_ids
+  asset.data.joint_pos_target[env_ids[:, None], joint_ids] = new_targets
 
 
 def smooth_arm_movement(
@@ -270,14 +267,15 @@ def smooth_arm_movement(
     # scale = min(1.0, max(0.0, (current_step - start_step) / (full_step - start_step)))
     scale = 1.0
     asset = env.scene[asset_cfg.name]
-    actuator_ids = asset_cfg.actuator_ids
+    joint_ids = asset_cfg.joint_ids
     
     base_pose = torch.tensor([0.0, -1.5, 1.5, 0.0, 0.0, 0.0, 0.0], device=env.device)
     
     # 2. IF WE ARE WAITING: Actively hold the arm tight
     if scale <= 0.0:
         new_targets = base_pose.unsqueeze(0).repeat(len(env_ids), 1)
-        env.sim.data.ctrl[env_ids[:, None], actuator_ids] = new_targets
+        # FIX: Write to joint_pos_target so it doesn't get overwritten
+        asset.data.joint_pos_target[env_ids[:, None], joint_ids] = new_targets
         return 
         
     # 3. IF WE ARE MOVING: Calculate a gentle sweep
@@ -309,14 +307,15 @@ def smooth_arm_movement(
     # Add the wave to the folded base pose
     new_targets = base_pose + amplitude * wave
     
-    env.sim.data.ctrl[env_ids[:, None], actuator_ids] = new_targets
+    # FIX: Write to joint_pos_target so it doesn't get overwritten
+    asset.data.joint_pos_target[env_ids[:, None], joint_ids] = new_targets
 
  
 def randomize_payload_mass(
     env: ManagerBasedRlEnv, 
     env_ids: torch.Tensor, 
     asset_cfg: SceneEntityCfg, 
-    mass_range: tuple[float, float] = (0.0, 0.5)
+    mass_range: tuple[float, float] = (0.0, 0.1)
 ):
     """
     Randomizes the mass of the arm's end-effector (link_6) using a curriculum.
@@ -334,8 +333,8 @@ def randomize_payload_mass(
     # --- CURRICULUM LOGIC (Phase 3: overlaps with arm!) ---
     current_step = env.common_step_counter
     
-    START_ITER = 10000   # Start weight while arm is still ramping
-    FULL_ITER = 15000    # Full weight range by this point
+    START_ITER = 17500   # Start weight AFTER arm is fully ramped
+    FULL_ITER = 22500    # Full weight range by this point
     STEPS_PER_ITER = 24
     
     start_step = START_ITER * STEPS_PER_ITER  # 240,000 steps
@@ -381,12 +380,13 @@ def reset_arm_to_folded(
 ):
     """Sets the arm control targets to the folded pose on reset to prevent snapping."""
     asset = env.scene[asset_cfg.name]
-    actuator_ids = asset_cfg.actuator_ids
+    joint_ids = asset_cfg.joint_ids
     
-    folded_targets = torch.tensor([0.0, -1.5, 1.5, 0.0, 0.0, 0.0,0.0], device=env.device)
+    folded_targets = torch.tensor([0.0, -1.5, 1.5, 0.0, 0.0, 0.0, 0.0], device=env.device)
     
     num_resets = len(env_ids)
-    env.sim.data.ctrl[env_ids[:, None], actuator_ids] = folded_targets.repeat(num_resets, 1)
+    # FIX: Write to joint_pos_target so it doesn't get overwritten
+    asset.data.joint_pos_target[env_ids[:, None], joint_ids] = folded_targets.repeat(num_resets, 1)
 
 
 # def smooth_randomize_arm_targets(

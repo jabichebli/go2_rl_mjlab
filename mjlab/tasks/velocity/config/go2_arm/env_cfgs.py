@@ -39,13 +39,16 @@ def unitree_go2_arm_rough_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
     num_slots=1,
     track_air_time=True,
   )
+  # Exclude foot geoms AND arm mounting hardware from illegal contact.
+  # mount/rail geoms are near the arm base and can touch terrain during extreme sweeps.
+  arm_mount_geoms = ("mount_collision", "left_rail_collision", "right_rail_collision")
   nonfoot_ground_cfg = ContactSensorCfg(
     name="nonfoot_ground_touch",
     primary=ContactMatch(
       mode="geom",
       entity="robot",
       pattern=r".*_collision\d*$",
-      exclude=tuple(geom_names),
+      exclude=tuple(geom_names) + arm_mount_geoms,
     ),
     secondary=ContactMatch(mode="body", pattern="terrain"),
     fields=("found",),
@@ -120,16 +123,16 @@ def unitree_go2_arm_rough_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
       params={"asset_cfg": SceneEntityCfg("robot", joint_names=arm_joints, actuator_names=arm_joints)}
   )
   
-  # Randomize the weight the arm is holding (ENABLED - overlaps with arm curriculum)
+  # Randomize the weight the arm is holding (DISABLED for now - training arm movement first)
   # Phase 3: 10k-15k iterations, overlaps with arm phase (7.5k-12.5k)
-  cfg.events["randomize_payload_mass"] = EventTermCfg(
-      func=mdp.randomize_payload_mass,
-      mode="reset",  # Apply a new random mass every episode restart
-      params={
-          "asset_cfg": SceneEntityCfg("robot", body_names=["link_6"]),
-          "mass_range": (0.0, 0.5)  # 0 to 500 grams (curriculum controls max)
-      },
-  )
+  # cfg.events["randomize_payload_mass"] = EventTermCfg(
+  #     func=mdp.randomize_payload_mass,
+  #     mode="reset",  # Apply a new random mass every episode restart
+  #     params={
+  #         "asset_cfg": SceneEntityCfg("robot", body_names=["link_6"]),
+  #         "mass_range": (0.0, 0.1)  # 0 to 100 grams (curriculum controls max)
+  #     },
+  # )
 
   # 6. VIEWER & BASE CONFIG
   cfg.viewer.body_name = "base_link"
@@ -181,6 +184,12 @@ def unitree_go2_arm_rough_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
     cfg.events.pop("push_robot", None)
    # cfg.events.pop("randomize_arm_interval", None)
    # cfg.events.pop("randomize_arm_reset", None)
+
+    # Override arm curriculum to use full scale during play
+    # Speed up arm movement 20x for better visualization (~1.75s per pose transition)
+    if "move_arm_smoothly" in cfg.events:
+      cfg.events["move_arm_smoothly"].params["scale_override"] = 0.5  # 0.0=folded, 0.1=slight, 1.0=full
+      cfg.events["move_arm_smoothly"].params["speed_multiplier"] = 1.0
 
     if cfg.scene.terrain is not None and cfg.scene.terrain.terrain_generator is not None:
       cfg.scene.terrain.terrain_generator.curriculum = False

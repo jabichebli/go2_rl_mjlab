@@ -174,6 +174,59 @@ def feet_clearance(
   return cost
 
 
+def feet_clearance_height_adaptive(
+  env: ManagerBasedRlEnv,
+  target_height_at_max: float,
+  target_height_at_min: float,
+  height_command_name: str,
+  height_range: tuple[float, float],
+  command_name: str | None = None,
+  command_threshold: float = 0.1,
+  asset_cfg: SceneEntityCfg = _DEFAULT_ASSET_CFG,
+) -> torch.Tensor:
+  """Penalize deviation from target clearance height that scales with commanded body height.
+  
+  Args:
+    target_height_at_max: Foot clearance target when body is at max height (e.g., 0.10m)
+    target_height_at_min: Foot clearance target when body is at min height (e.g., 0.05m)
+    height_command_name: Name of command term that has height_command attribute
+    height_range: (min_height, max_height) of body height command range
+    command_name: Velocity command name for activity gating
+    command_threshold: Below this velocity, don't penalize
+    asset_cfg: Asset config with site_names for feet
+  """
+  asset: Entity = env.scene[asset_cfg.name]
+  command_term = env.command_manager.get_term(height_command_name)
+  
+  # Get commanded body height and compute interpolation factor
+  body_height_cmd = command_term.height_command  # [B]
+  min_h, max_h = height_range
+  # Normalize to [0, 1] where 0 = min height, 1 = max height
+  alpha = (body_height_cmd - min_h) / (max_h - min_h)
+  alpha = torch.clamp(alpha, 0.0, 1.0)
+  
+  # Interpolate target foot clearance
+  target_clearance = target_height_at_min + alpha * (target_height_at_max - target_height_at_min)  # [B]
+  
+  foot_z = asset.data.site_pos_w[:, asset_cfg.site_ids, 2]  # [B, N]
+  foot_vel_xy = asset.data.site_lin_vel_w[:, asset_cfg.site_ids, :2]  # [B, N, 2]
+  vel_norm = torch.norm(foot_vel_xy, dim=-1)  # [B, N]
+  
+  # Target clearance needs to be broadcast to [B, N]
+  delta = torch.abs(foot_z - target_clearance.unsqueeze(1))  # [B, N]
+  cost = torch.sum(delta * vel_norm, dim=1)  # [B]
+  
+  if command_name is not None:
+    command = env.command_manager.get_command(command_name)
+    if command is not None:
+      linear_norm = torch.norm(command[:, :2], dim=1)
+      angular_norm = torch.abs(command[:, 2])
+      total_command = linear_norm + angular_norm
+      active = (total_command > command_threshold).float()
+      cost = cost * active
+  return cost
+
+
 class feet_swing_height:
   """Penalize deviation from target swing height, evaluated at landing."""
 
