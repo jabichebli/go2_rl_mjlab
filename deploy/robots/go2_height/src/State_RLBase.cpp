@@ -27,21 +27,12 @@ State_RLBase::State_RLBase(int state_mode, std::string state_string)
 
 void State_RLBase::run()
 {
-    // --- EDITED: HEIGHT COMMAND INJECTION ---
-    // 1. Parse the raw remote control data from the Unitree SDK2 LowState message
-    unitree::common::xRockerBtnDataStruct remote;
+    // Fix the struct name so it compiles (Unitree changed this in their SDK)
+    unitree::common::BtnDataStruct remote;
     memcpy(&remote, FSMState::lowstate->msg_.wireless_remote().data(), sizeof(remote));
-    
-    // 2. Map remote.ry (Right Joystick Up/Down) from [-1.0, 1.0] to our height range [0.15, 0.38]
-    // Midpoint is 0.265, Half-range is 0.115
-    float target_height = 0.265 + (remote.ry * 0.115);
 
-    // 3. Inject this target height into the 4th index (index 3) of the twist command tensor
-    // This makes sure the C++ observation manager sees the height command you just requested
-    if (env->command_manager->commands.find("base_velocity") != env->command_manager->commands.end()) {
-        env->command_manager->commands["base_velocity"].data_ptr<float>()[3] = target_height;
-    }
-    // ----------------------------------------
+    // DELETE the old env->command_manager->commands["base_velocity"]... lines!
+    // We don't need them anymore because observations.h reads the joystick directly.
 
     auto action = env->action_manager->processed_actions();
     for(int i(0); i < env->robot->data.joint_ids_map.size(); i++) {

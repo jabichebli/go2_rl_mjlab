@@ -138,18 +138,26 @@ REGISTER_OBSERVATION(gait_phase)
 
 // ADDING: For Height Tracking
 REGISTER_OBSERVATION(base_height) {
-    // Returns the actual Z-coordinate of the robot
-    return std::vector<float>{env->robot->data.root_pos_w[2]};
+    // REALITY CHECK: The physical Go2 doesn't have a sensor that tells it its exact Z-height from the ground.
+    // Without a complex state estimator (forward kinematics), the standard sim-to-real trick 
+    // is to just feed the policy the nominal standing height so it doesn't panic.
+    return std::vector<float>{0.30f}; 
 }
 
 // ADDING: For Height Tracking
 REGISTER_OBSERVATION(commanded_height) {
-    float h = 0.0f;
-    if (env->command_manager->commands.count("base_velocity")) {
-        // Index 3 is where we injected the remote's height command in State_RLBase.cpp
-        h = env->command_manager->commands.at("base_velocity")->command[0][3];
-    }
-    return std::vector<float>{h};
+    // Grab the joystick data directly
+    auto & joystick = env->robot->data.joystick;
+    
+    // joystick->ry() gives a value from -1.0 (down) to 1.0 (up)
+    // Go2 nominal height is ~0.30m. Let's give it a range of +/- 0.10m.
+    // So pushing up goes to 0.40m, pushing down goes to 0.20m.
+    float target_height = 0.30f + (joystick->ry() * 0.10f);
+    
+    // Clamp it so you don't accidentally crush the dog or hyperextend its legs
+    target_height = std::clamp(target_height, 0.22f, 0.38f);
+
+    return std::vector<float>{target_height};
 }
 
 
