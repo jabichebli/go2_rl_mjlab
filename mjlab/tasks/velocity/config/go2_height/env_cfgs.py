@@ -8,6 +8,7 @@ from mjlab.envs.mdp.actions import JointPositionActionCfg
 from mjlab.managers.termination_manager import TerminationTermCfg
 from mjlab.managers.observation_manager import ObservationTermCfg # ADDED
 from mjlab.managers.reward_manager import RewardTermCfg         # ADDED
+from mjlab.managers.scene_entity_config import SceneEntityCfg   # ADDED for height-adaptive foot clearance
 from mjlab.sensor import ContactMatch, ContactSensorCfg
 from mjlab.tasks.velocity import mdp
 from mjlab.tasks.velocity.velocity_env_cfg import make_velocity_env_cfg
@@ -20,7 +21,7 @@ def unitree_go2_height_rough_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg
   cfg.scene.entities = {"robot": get_go2_robot_cfg()}
 
   # --- ADDED: Height Command Configuration ---
-  cfg.commands["twist"].ranges.base_height = (0.15, 0.38)
+  cfg.commands["twist"].ranges.base_height = (0.20, 0.40)
 
   # --- ADDED: Height Observations ---
   cfg.observations["policy"].terms["base_height"] = ObservationTermCfg(
@@ -38,7 +39,7 @@ def unitree_go2_height_rough_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg
       params={"std": 0.05, "command_name": "twist"},
   )
 
-  # --- ADDED: Relax the pose reward so the robot is allowed to bend its legs ---
+  # --- Reduce pose reward weight to allow height adjustment ---
   if "pose" in cfg.rewards:
       cfg.rewards["pose"].weight *= 0.1 
 
@@ -84,6 +85,7 @@ def unitree_go2_height_rough_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg
 
   cfg.events["base_com"].params["asset_cfg"].body_names = ("base_link",)
 
+  # --- Pose std values (same as original go2, weight reduced above) ---
   cfg.rewards["pose"].params["std_standing"] = {
     r".*(FR|FL|RR|RL)_hip_joint.*": 0.05,
     r".*(FR|FL|RR|RL)_thigh_joint.*": 0.1,
@@ -99,8 +101,25 @@ def unitree_go2_height_rough_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg
     r".*(FR|FL|RR|RL)_thigh_joint.*": 0.35,
     r".*(FR|FL|RR|RL)_calf_joint.*": 0.5,
   }
+  
   cfg.rewards["body_ang_vel"].params["asset_cfg"].body_names = ("base_link",)
-  cfg.rewards["foot_clearance"].params["asset_cfg"].site_names = site_names
+  
+  # --- Replace fixed foot_clearance with height-adaptive version ---
+  del cfg.rewards["foot_clearance"]
+  cfg.rewards["foot_clearance"] = RewardTermCfg(
+      func=mdp.feet_clearance_height_adaptive,
+      weight=-1.0,
+      params={
+          "target_height_at_max": 0.10,   # 10cm clearance at 0.40m body height (normal)
+          "target_height_at_min": 0.03,   # 3cm clearance at 0.20m body height (crouched, legs have less room)
+          "height_command_name": "twist",
+          "height_range": (0.20, 0.40),
+          "command_name": "twist",
+          "command_threshold": 0.1,
+          "asset_cfg": SceneEntityCfg("robot", site_names=site_names),
+      },
+  )
+  
   cfg.rewards["foot_slip"].params["asset_cfg"].site_names = site_names
 
   cfg.terminations["illegal_contact"] = TerminationTermCfg(

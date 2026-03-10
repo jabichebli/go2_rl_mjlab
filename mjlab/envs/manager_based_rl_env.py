@@ -320,9 +320,18 @@ class ManagerBasedRlEnv:
   def step(self, action: torch.Tensor) -> types.VecEnvStepReturn:
     self.action_manager.process_action(action.to(self.device))
 
+    # Pre-compute env_ids for step-mode events (reused in loop)
+    _step_mode_active = "step" in self.event_manager.available_modes
+    if _step_mode_active:
+      _all_env_ids = torch.arange(self.num_envs, device=self.device)
+
     for _ in range(self.cfg.decimation):
       self._sim_step_counter += 1
       self.action_manager.apply_action()
+      # Apply step-mode events AFTER action but BEFORE physics
+      # This allows events like arm_sweep to override policy actions
+      if _step_mode_active:
+        self.event_manager.apply(mode="step", env_ids=_all_env_ids)
       self.scene.write_data_to_sim()
       self.sim.step()
       self.scene.update(dt=self.physics_dt)
