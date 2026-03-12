@@ -37,30 +37,63 @@ def extreme_arm_sweep(
     """
     
     # === CURRICULUM LEARNING ===
-    # Phase 1: 0 -> 7,500 iterations = arm stays TUCKED (learn to walk first!)
-    # Phase 2: 7,500 -> 12,500 iterations = arm movement scales 0% -> 100%
+    # === STAGGERED CURRICULUM ===
+    # Key insight: NOT all environments should transition at the same time!
+    # This prevents catastrophic forgetting of walking behavior.
+    #
+    # Phase 1: 0 -> 5k iterations = arm stays TUCKED (learn to walk first!)
+    # Phase 2: 5k -> 20k iterations = GRADUAL ramp with per-env staggering
+    #   - 20% of envs: ALWAYS scale=0 (pure walking reference)
+    #   - 80% of envs: Random offset into curriculum (diversity)
     # 
-    # Assuming 24 steps per iteration (your env config)
-    current_step = env.common_step_counter
+    # This ensures the policy always sees some "easy walking" examples
+    # and doesn't learn to freeze to survive arm movements.
     
-    START_ITER = 10000
-    FULL_ITER = 17500
+    current_step = env.common_step_counter
     STEPS_PER_ITER = 24
     
-    start_step = START_ITER * STEPS_PER_ITER   # 180,000 steps
-    full_step = FULL_ITER * STEPS_PER_ITER     # 300,000 steps
+    # Curriculum timing (in iterations)
+    START_ITER = 5000      # Start arm movement earlier
+    FULL_ITER = 20000      # Reach full scale later (more time to adapt)
     
-    # Calculate scale: 0.0 before start, ramps to 1.0 at full
-    if scale_override is not None:
-        scale = scale_override
-    elif current_step < start_step:
-        scale = 0.0
-    else:
-        scale = min(1.0, (current_step - start_step) / (full_step - start_step))
+    start_step = START_ITER * STEPS_PER_ITER
+    full_step = FULL_ITER * STEPS_PER_ITER
     
     asset = env.scene[asset_cfg.name]
-    joint_ids = asset_cfg.joint_ids  # Used for writing targets
+    joint_ids = asset_cfg.joint_ids
     num_envs = len(env_ids)
+    
+    # Calculate base scale from curriculum
+    if scale_override is not None:
+        # Play mode: use override for all envs
+        scale = torch.full((num_envs,), scale_override, device=env.device)
+    elif current_step < start_step:
+        scale = torch.zeros(num_envs, device=env.device)
+    else:
+        base_progress = min(1.0, (current_step - start_step) / (full_step - start_step))
+        
+        # === PER-ENVIRONMENT STAGGERING ===
+        # Create persistent random offsets for each environment
+        if not hasattr(env, '_arm_curriculum_offsets'):
+            # 20% of envs get scale=0 (pure walking), 80% get curriculum
+            env._arm_curriculum_offsets = torch.rand(env.num_envs, device=env.device)
+            # Mark 20% as "walking only" (offset = -1 means always scale=0)
+            walking_only_mask = torch.rand(env.num_envs, device=env.device) < 0.2
+            env._arm_curriculum_offsets[walking_only_mask] = -1.0
+        
+        offsets = env._arm_curriculum_offsets[env_ids]
+        
+        # Walking-only envs stay at scale=0
+        # Others get staggered progress: their "personal" curriculum is offset
+        # This means some envs are "ahead" and some are "behind" in the curriculum
+        scale = torch.zeros(num_envs, device=env.device)
+        active_mask = offsets >= 0
+        
+        # Staggered scale: base_progress adjusted by per-env offset
+        # offset in [0, 1] shifts when this env "starts" its curriculum
+        # env with offset=0.5 starts at 50% progress when base is 0.5, reaches 1.0 when base is 1.0
+        staggered_progress = (base_progress - offsets[active_mask] * 0.5).clamp(0, 1)
+        scale[active_mask] = staggered_progress
     
     # === EXTREME POSES (from test_sweep.py - these create maximum torque!) ===
     # Format: [J0, J1, J2, J3, J4, J5, Gripper]
@@ -155,20 +188,25 @@ def extreme_arm_sweep(
     # 3. Better match real-world arm capabilities
     #
     # REALISTIC SPEEDS for a robot arm:
-    #   - Slow (2500 steps / 50s): Very careful, deliberate movements
-    #   - Medium (1750 steps / 35s): Normal operation  
-    #   - Fast (1000 steps / 20s): Quick but achievable
+    #   - Slow (3500 steps / 70s): Very careful, deliberate movements
+    #   - Medium (2500 steps / 50s): Normal operation  
+    #   - Fast (1750 steps / 35s): Quick but achievable
     #
-    # CURRICULUM also affects speed:
-    #   - Early in Phase 2: ONLY slow movements allowed
-    #   - Later in Phase 2: Full speed range unlocked
+    # SPEED CURRICULUM: Start SLOW, gradually allow faster movements
+    # Early training: 2x slower (3500 steps per transition)
+    # Late training: normal speed (1750 steps per transition)
     
-    # Base range (will be modified by curriculum and speed_multiplier)
-    # At speed_multiplier=1.0: 35 seconds per pose (training)
-    # At speed_multiplier=4.0: ~8.75 seconds per pose (play/demo)
-    # 
-    # SIMPLIFIED: transition time = segment duration = continuous motion, no holding!
-    SEGMENT_DURATION = int(1750 / speed_multiplier)
+    # Calculate speed factor from curriculum progress
+    # At start of Phase 2 (scale near 0): speed_factor = 0.5 (2x slower)
+    # At end of curriculum (scale = 1): speed_factor = 1.0 (normal)
+    avg_scale = scale.mean().item() if scale.numel() > 0 else 0.0
+    speed_factor = 0.5 + 0.5 * avg_scale  # Ramps from 0.5 to 1.0
+    
+    # Base duration (at speed_factor=1.0, speed_multiplier=1.0): 2500 steps = 50s per pose
+    # During early training: 2500/0.5 = 5000 steps = 100s per pose (very slow!)
+    # During play (speed_multiplier=4.0): 2500/4 = 625 steps = 12.5s per pose
+    BASE_SEGMENT_DURATION = 2500
+    SEGMENT_DURATION = int(BASE_SEGMENT_DURATION / (speed_multiplier * speed_factor))
     
     # === PERSISTENT RANDOM STATE ===
     # Created once per session. Ensures:
@@ -215,10 +253,11 @@ def extreme_arm_sweep(
     targets = current_poses + (next_poses - current_poses) * smooth_progress.unsqueeze(1)
     
     # === APPLY CURRICULUM ===
-    # If scale < 1.0, blend towards tucked pose (reduce intensity early in training)
-    if scale < 1.0:
-        tucked = poses[0].unsqueeze(0).expand(num_envs, -1)
-        targets = tucked + (targets - tucked) * scale
+    # scale is now per-environment tensor [num_envs]
+    # Blend towards tucked pose based on each env's scale
+    tucked = poses[0].unsqueeze(0).expand(num_envs, -1)
+    # scale[:, None] broadcasts to [num_envs, 7]
+    targets = tucked + (targets - tucked) * scale.unsqueeze(1)
     
     # FIX: Write to joint_pos_target instead of ctrl!
     # The ctrl gets overwritten by write_data_to_sim() which reads from joint_pos_target.
