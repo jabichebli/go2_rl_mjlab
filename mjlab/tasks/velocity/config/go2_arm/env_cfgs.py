@@ -185,11 +185,12 @@ def unitree_go2_arm_rough_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
    # cfg.events.pop("randomize_arm_interval", None)
    # cfg.events.pop("randomize_arm_reset", None)
 
-    # Override arm curriculum to use full scale during play
-    # Speed up arm movement 20x for better visualization (~1.75s per pose transition)
+    # Override arm curriculum to use full scale during play.
+    # The training default is ~50 s per pose transition, which looks stationary in play.
+    # Use a much higher speed here so the sweep is visibly continuous.
     if "move_arm_smoothly" in cfg.events:
-      cfg.events["move_arm_smoothly"].params["scale_override"] = 0.0  # 0.0=folded, 0.1=slight, 1.0=full
-      cfg.events["move_arm_smoothly"].params["speed_multiplier"] = 1.0
+      cfg.events["move_arm_smoothly"].params["scale_override"] = 1.0  # 0.0=folded, 0.1=slight, 1.0=full
+      cfg.events["move_arm_smoothly"].params["speed_multiplier"] = 16.0
 
     if cfg.scene.terrain is not None and cfg.scene.terrain.terrain_generator is not None:
       cfg.scene.terrain.terrain_generator.curriculum = False

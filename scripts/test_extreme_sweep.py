@@ -1,8 +1,8 @@
 """
 Visualization script for extreme_arm_sweep algorithm.
 
-This runs the EXACT SAME algorithm as events.py:extreme_arm_sweep()
-so you can visualize and verify it works before training.
+This mirrors the pose library and the main timing behavior from
+events.py:extreme_arm_sweep() closely enough to debug the sweep set by eye.
 
 Run with: python scripts/test_extreme_sweep.py
 """
@@ -75,16 +75,17 @@ POSES = np.array([
     # 19: Forward right + wrist bent
     [2.3, 1.571, -1.571, 0.0, 1.571, 0.0, 0.0],
     
-    # === GROUND-REACHING (arm extended downward toward floor) ===
-    # J1=90° forward, J2=0° (elbow straight down)
+    # === GROUND-REACHING (forward/downward without passing through the torso) ===
+    # Keep some elbow extension so the arm stays in front of the body during
+    # transitions instead of folding through the torso volume.
     # 20: Ground reach center
-    [0.0, 1.571, 0.0, 0.0, 0.0, 0.0, 0.0],
+    [0.0, 1.25, -0.85, 0.0, 0.0, 0.0, 0.0],
     # 21: Ground reach left
-    [-2.3, 1.571, 0.0, 0.0, 0.0, 0.0, 0.0],
+    [-2.3, 1.25, -0.85, 0.0, 0.0, 0.0, 0.0],
     # 22: Ground reach right
-    [2.3, 1.571, 0.0, 0.0, 0.0, 0.0, 0.0],
+    [2.3, 1.25, -0.85, 0.0, 0.0, 0.0, 0.0],
     # 23: Ground reach center with wrist
-    [0.0, 1.571, 0.0, 0.0, 1.571, 0.0, 0.0],
+    [0.0, 1.25, -0.85, 0.0, 1.2, 0.0, 0.0],
     
     # === DIAGONAL EXTREMES (from test_sweep.py) ===
     # These create complex off-axis torques
@@ -113,9 +114,14 @@ POSE_NAMES = [
 ]
 
 
-def get_arm_target_random(step: int, env_id: int = 0, show_curriculum: bool = False,
-                          random_offset: int | None = None,
-                          override_iter: int | None = None):
+def get_arm_target_random(
+    step: int,
+    env_id: int = 0,
+    show_curriculum: bool = False,
+    random_offset: int | None = None,
+    override_iter: int | None = None,
+    play_speed_override: float | None = None,
+):
     """
     EXACT SAME ALGORITHM as events.py:extreme_arm_sweep()
     
@@ -136,8 +142,8 @@ def get_arm_target_random(step: int, env_id: int = 0, show_curriculum: bool = Fa
     
     # === CURRICULUM (same as events.py) ===
     if show_curriculum or override_iter is not None:
-        START_ITER = 10000
-        FULL_ITER = 17500
+        START_ITER = 5000
+        FULL_ITER = 20000
         STEPS_PER_ITER = 24
         
         if override_iter is not None:
@@ -146,8 +152,8 @@ def get_arm_target_random(step: int, env_id: int = 0, show_curriculum: bool = Fa
         else:
             effective_step = step
         
-        start_step_curr = START_ITER * STEPS_PER_ITER   # 180,000 steps
-        full_step_curr = FULL_ITER * STEPS_PER_ITER     # 300,000 steps
+        start_step_curr = START_ITER * STEPS_PER_ITER
+        full_step_curr = FULL_ITER * STEPS_PER_ITER
         
         if effective_step < start_step_curr:
             scale = 0.0
@@ -156,23 +162,36 @@ def get_arm_target_random(step: int, env_id: int = 0, show_curriculum: bool = Fa
     else:
         scale = 1.0  # No curriculum - show full movement
     
-    # === CONTINUOUS MOTION (same as events.py - simplified!) ===
-    # Transition time = segment duration = always moving, no holding
-    SEGMENT_DURATION = 1750  # 35 seconds per pose at training speed
+    # === SPEED CURRICULUM / PLAY OVERRIDE ===
+    # Default behavior approximates the current training logic:
+    # - each env gets a persistent speed profile in [4, 12]
+    # - that profile ramps with curriculum progress
+    # For direct play comparisons, pass play_speed_override to use a fixed speed.
+    if play_speed_override is not None:
+        effective_speed_multiplier = float(play_speed_override)
+    else:
+        min_speed_multiplier = 4.0
+        max_speed_multiplier = 12.0
+        env_hash = ((env_id * 1103515245 + 12345) & 0x7FFFFFFF) / 0x7FFFFFFF
+        env_speed_multiplier = min_speed_multiplier + (
+            max_speed_multiplier - min_speed_multiplier
+        ) * env_hash
+        effective_speed_multiplier = env_speed_multiplier * (0.5 + 0.5 * scale)
+    segment_duration = max(1, int(2500 / effective_speed_multiplier))
     
     # === DESYNCHRONIZATION ===
     if random_offset is not None:
         time_offset = random_offset
     else:
-        time_offset = (env_id * 7919) % (SEGMENT_DURATION * num_poses)
+        time_offset = (env_id * 7919) % (2500 * num_poses)
     adjusted_step = step + time_offset
     
     # Segment tracking
-    segment_idx = adjusted_step // SEGMENT_DURATION
+    segment_idx = adjusted_step // segment_duration
     
     # Progress within segment - ALWAYS 0→1 over full segment (continuous motion!)
-    steps_in_segment = adjusted_step % SEGMENT_DURATION
-    progress = steps_in_segment / float(SEGMENT_DURATION)
+    steps_in_segment = adjusted_step % segment_duration
+    progress = steps_in_segment / float(segment_duration)
     
     # Smooth interpolation (same cosine ease as events.py)
     smooth_progress = (1.0 - math.cos(progress * math.pi)) / 2.0
@@ -192,13 +211,25 @@ def get_arm_target_random(step: int, env_id: int = 0, show_curriculum: bool = Fa
         tucked = POSES[0]
         target = tucked + (target - tucked) * scale
     
-    # Return transition time in seconds for display
-    transition_seconds = SEGMENT_DURATION / 50.0  # Fixed 35s per pose at training rate
-    
-    return target[:6], current_pose_idx, next_pose_idx, smooth_progress, scale, transition_seconds
+    # Return transition time in seconds for display.
+    transition_seconds = segment_duration / 50.0
+
+    return (
+        target[:6],
+        current_pose_idx,
+        next_pose_idx,
+        smooth_progress,
+        scale,
+        transition_seconds,
+        effective_speed_multiplier,
+    )
 
 
-def run_random_visualization(env_id: int = 0, at_iter: int | None = None):
+def run_random_visualization(
+    env_id: int = 0,
+    at_iter: int | None = None,
+    play_speed_override: float | None = None,
+):
     """
     Visualize the random arm sweep algorithm for a specific env_id.
     
@@ -208,14 +239,19 @@ def run_random_visualization(env_id: int = 0, at_iter: int | None = None):
     """
     # Use a random offset to simulate how play mode now works
     import random
-    random_offset = random.randint(0, 1750 * len(POSES))
+    random_offset = random.randint(0, 2500 * len(POSES))
     
     print(f"Loading Go2 model...")
     print(f"Visualizing env_id={env_id}")
     if at_iter is not None:
         print(f"Simulating training at iteration {at_iter}")
+    if play_speed_override is not None:
+        print(f"Using exact play-style speed override: x{play_speed_override:.2f}")
     print(f"Random time offset: {random_offset} (different each launch, like play mode)")
-    print(f"Transition speed: 35.0s per pose (fixed, continuous motion)")
+    if play_speed_override is None:
+        print("Transition speed: curriculum-dependent training profile")
+    else:
+        print("Transition speed: fixed play-style override")
     print(f"Total poses: {len(POSES)}")
     print("-" * 60)
     
@@ -266,15 +302,20 @@ def run_random_visualization(env_id: int = 0, at_iter: int | None = None):
 
             # Get arm targets using the SAME ALGORITHM as training
             # Only recalculate every decimation steps (matches policy rate)
-            arm_targets, current_idx, next_idx, progress, scale, trans_time = get_arm_target_random(
+            arm_targets, current_idx, next_idx, progress, scale, trans_time, speed_mult = get_arm_target_random(
                 step, env_id, random_offset=random_offset,
                 override_iter=at_iter,
+                play_speed_override=play_speed_override,
             )
             
             # Print when transitioning to a new pose
             if current_idx != last_current_idx:
                 scale_str = f" [scale={scale:.2f}]" if at_iter is not None else ""
-                print(f"Step {step:6d}: [{POSE_NAMES[current_idx]:18s}] -> [{POSE_NAMES[next_idx]:18s}] ({trans_time:.1f}s){scale_str}")
+                print(
+                    f"Step {step:6d}: [{POSE_NAMES[current_idx]:18s}] -> "
+                    f"[{POSE_NAMES[next_idx]:18s}] "
+                    f"({trans_time:.1f}s, x{speed_mult:.2f}){scale_str}"
+                )
                 last_current_idx = current_idx
 
             # Apply to arm motors
@@ -304,8 +345,8 @@ def run_curriculum_demo():
     print("CURRICULUM LEARNING DEMONSTRATION")
     print("=" * 70)
     print()
-    print("Phase 1:      0 -> 10,000 iters  = Arm TUCKED (learn to walk)")
-    print("Phase 2: 10,000 -> 17,500 iters  = Arm ramps 0% -> 100%")
+    print("Phase 1:      0 -> 5,000 iters   = Arm TUCKED (learn to walk)")
+    print("Phase 2:  5,000 -> 20,000 iters  = Arm ramps 0% -> 100%")
     print("Phase 3: 17,500 -> 22,500 iters  = Weight ramps 0% -> 100% (sequential!)")
     print()
     print("Tuck pose: [J0=0, J1=-1.5, J2=1.5, ...] = arm folded back against body")
@@ -321,12 +362,12 @@ def run_curriculum_demo():
     WEIGHT_FULL = 22500
     
     # Arm curriculum params
-    ARM_START = 10000
-    ARM_FULL = 17500
+    ARM_START = 5000
+    ARM_FULL = 20000
     
     for iter_num in test_iterations:
         step = iter_num * STEPS_PER_ITER
-        _, _, _, _, arm_scale, _ = get_arm_target_random(step, env_id=0, show_curriculum=True)
+        _, _, _, _, arm_scale, _, _ = get_arm_target_random(step, env_id=0, show_curriculum=True)
         
         # Weight scale
         if iter_num < WEIGHT_START:
@@ -365,13 +406,12 @@ def compare_multiple_envs():
     print("=" * 70)
     
     for env_id in [0, 1, 2, 3, 100, 500]:
-        speed_hash = ((env_id * 7127 + 2731) % 1000) / 1000.0
-        base_speed = (1000 + (2500 - 1000) * speed_hash) / 50.0
-        print(f"\nEnv {env_id} (base speed: {base_speed:.1f}s) - first 10 transitions:")
+        _, _, _, _, _, trans_time0, speed_mult0 = get_arm_target_random(0, env_id)
+        print(f"\nEnv {env_id} (approx pose time: {trans_time0:.1f}s, x{speed_mult0:.2f}) - first 10 transitions:")
         for segment in range(10):
             step = segment * 200  # Approximate segment start
-            _, current_idx, next_idx, _, _, trans_time = get_arm_target_random(step, env_id)
-            print(f"  {POSE_NAMES[current_idx]:18s} -> {POSE_NAMES[next_idx]:18s} ({trans_time:.1f}s)")
+            _, current_idx, next_idx, _, _, trans_time, speed_mult = get_arm_target_random(step, env_id)
+            print(f"  {POSE_NAMES[current_idx]:18s} -> {POSE_NAMES[next_idx]:18s} ({trans_time:.1f}s, x{speed_mult:.2f})")
     
     print("\n" + "=" * 70)
 
@@ -389,12 +429,11 @@ def run_walk_through():
     phases = [
         (0,     "Phase 1: TUCKED (learning to walk)"),
         (5000,  "Phase 1: TUCKED (still learning to walk)"),
-        (10000, "Phase 2 START: Arm begins moving (scale=0%)"),
-        (12500, "Phase 2: Arm at 33% scale"),
+        (5000,  "Phase 2 START: Arm begins moving (scale=0%)"),
+        (10000, "Phase 2: Arm at 33% scale"),
         (15000, "Phase 2: Arm at 67% scale"),
-        (17500, "Phase 2 DONE + Phase 3 START: Full arm, Weight starts"),
-        (20000, "Phase 3: Full arm + Weight 50%"),
-        (22500, "ALL COMPLETE: Full arm + Full weight"),
+        (20000, "Phase 2 DONE: Full arm"),
+        (22500, "Phase 3: Full arm + Weight 100%"),
     ]
     
     robot = Entity(get_go2_arm_robot_cfg())
@@ -421,7 +460,7 @@ def run_walk_through():
         elif "calf" in actuator_name:
             leg_ids[i] = -1.5
     
-    random_offset = random.randint(0, 1750 * len(POSES))
+    random_offset = random.randint(0, 2500 * len(POSES))
     
     phase_idx = 0
     current_phase_iter, current_phase_label = phases[phase_idx]
@@ -442,13 +481,17 @@ def run_walk_through():
             for act_id, target_pos in leg_ids.items():
                 data.ctrl[act_id] = target_pos
             
-            arm_targets, current_idx, next_idx, progress, scale, trans_time = get_arm_target_random(
+            arm_targets, current_idx, next_idx, progress, scale, trans_time, speed_mult = get_arm_target_random(
                 step, env_id=0, random_offset=random_offset,
                 override_iter=current_phase_iter,
             )
             
             if current_idx != last_current_idx:
-                print(f"  Step {step:6d}: [{POSE_NAMES[current_idx]:18s}] -> [{POSE_NAMES[next_idx]:18s}] (scale={scale:.2f})")
+                print(
+                    f"  Step {step:6d}: [{POSE_NAMES[current_idx]:18s}] -> "
+                    f"[{POSE_NAMES[next_idx]:18s}] (scale={scale:.2f}, "
+                    f"{trans_time:.1f}s, x{speed_mult:.2f})"
+                )
                 last_current_idx = current_idx
             
             for i, act_id in enumerate(arm_ids):
@@ -487,6 +530,7 @@ if __name__ == "__main__":
         print("  <env_id>          Visualize arm sweep for specific env_id (e.g., 0, 1, 42)")
         print("  --iter <N>        Visualize arm at training iteration N (see curriculum effect)")
         print("                    e.g., --iter 0 = TUCK, --iter 10000 = 50% arm, --iter 15000 = full")
+        print("  --play-speed <S>  Visualize with exact fixed play speed (e.g., --play-speed 4)")
         print("  --walk-through    Auto-advance through all curriculum phases in viewer")
         print("  --curriculum      Print curriculum timeline (text only)")
         print("  --compare         Compare pose sequences for different env_ids (text only)")
@@ -504,6 +548,14 @@ if __name__ == "__main__":
             sys.exit(1)
         print(f"Showing arm behavior at training iteration {iter_num}")
         run_random_visualization(env_id=0, at_iter=iter_num)
+    elif "--play-speed" in args:
+        idx = args.index("--play-speed")
+        if idx + 1 < len(args):
+            speed = float(args[idx + 1])
+        else:
+            print("Error: --play-speed requires a numeric multiplier (e.g., --play-speed 4)")
+            sys.exit(1)
+        run_random_visualization(env_id=0, play_speed_override=speed)
     elif "--compare" in args:
         compare_multiple_envs()
     elif "--curriculum" in args:

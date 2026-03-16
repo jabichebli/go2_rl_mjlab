@@ -9,7 +9,10 @@ def extreme_arm_sweep(
     env_ids: torch.Tensor, 
     asset_cfg: SceneEntityCfg,
     scale_override: float | None = None,
-    speed_multiplier: float = 1.0
+    speed_multiplier: float = 1.0,
+    min_speed_multiplier: float = 4.0,
+    max_speed_multiplier: float = 16.0,
+    walking_only_fraction: float = 0.1,
 ):
     """
     Creates EXTREME, RANDOM arm movements using coordinated poses.
@@ -32,8 +35,10 @@ def extreme_arm_sweep(
     Args:
         scale_override: If provided, bypasses curriculum and uses this scale directly.
                        Set to 1.0 in play mode to see full arm range.
-        speed_multiplier: Multiplier for arm movement speed. Default 1.0 for training.
-                         Set to 4.0 in play mode for faster, more visible movements.
+        speed_multiplier: Fixed multiplier used when play mode explicitly overrides speed.
+        min_speed_multiplier: Lower bound of the training speed curriculum.
+        max_speed_multiplier: Upper bound of the training speed curriculum.
+        walking_only_fraction: Fraction of envs that keep the arm tucked as an easy reference.
     """
     
     # === CURRICULUM LEARNING ===
@@ -75,10 +80,11 @@ def extreme_arm_sweep(
         # === PER-ENVIRONMENT STAGGERING ===
         # Create persistent random offsets for each environment
         if not hasattr(env, '_arm_curriculum_offsets'):
-            # 20% of envs get scale=0 (pure walking), 80% get curriculum
+            # Keep a small pool of easy walking envs as a reference, but make most
+            # environments experience arm disturbances so the policy cannot ignore them.
             env._arm_curriculum_offsets = torch.rand(env.num_envs, device=env.device)
-            # Mark 20% as "walking only" (offset = -1 means always scale=0)
-            walking_only_mask = torch.rand(env.num_envs, device=env.device) < 0.2
+            # Mark some envs as "walking only" (offset = -1 means always scale=0)
+            walking_only_mask = torch.rand(env.num_envs, device=env.device) < walking_only_fraction
             env._arm_curriculum_offsets[walking_only_mask] = -1.0
         
         offsets = env._arm_curriculum_offsets[env_ids]
@@ -155,16 +161,17 @@ def extreme_arm_sweep(
         # 19: Forward right + wrist bent
         [2.3, 1.571, -1.571, 0.0, 1.571, 0.0, 0.0],
         
-        # === GROUND-REACHING (arm extended downward toward floor) ===
-        # J1=90° forward, J2=0° (elbow straight down)
+        # === GROUND-REACHING (forward/downward without passing through the torso) ===
+        # Keep some elbow extension so the arm stays in front of the body during
+        # transitions instead of folding back through the torso volume.
         # 20: Ground reach center
-        [0.0, 1.571, 0.0, 0.0, 0.0, 0.0, 0.0],
+        [0.0, 1.25, -0.85, 0.0, 0.0, 0.0, 0.0],
         # 21: Ground reach left
-        [-2.3, 1.571, 0.0, 0.0, 0.0, 0.0, 0.0],
+        [-2.3, 1.25, -0.85, 0.0, 0.0, 0.0, 0.0],
         # 22: Ground reach right
-        [2.3, 1.571, 0.0, 0.0, 0.0, 0.0, 0.0],
+        [2.3, 1.25, -0.85, 0.0, 0.0, 0.0, 0.0],
         # 23: Ground reach center with wrist
-        [0.0, 1.571, 0.0, 0.0, 1.571, 0.0, 0.0],
+        [0.0, 1.25, -0.85, 0.0, 1.2, 0.0, 0.0],
         
         # === DIAGONAL EXTREMES (from test_sweep.py) ===
         # These create complex off-axis torques
@@ -187,26 +194,34 @@ def extreme_arm_sweep(
     # 2. Train robustness to fast AND slow arm movements
     # 3. Better match real-world arm capabilities
     #
-    # REALISTIC SPEEDS for a robot arm:
-    #   - Slow (3500 steps / 70s): Very careful, deliberate movements
-    #   - Medium (2500 steps / 50s): Normal operation  
-    #   - Fast (1750 steps / 35s): Quick but achievable
-    #
-    # SPEED CURRICULUM: Start SLOW, gradually allow faster movements
-    # Early training: 2x slower (3500 steps per transition)
-    # Late training: normal speed (1750 steps per transition)
-    
-    # Calculate speed factor from curriculum progress
-    # At start of Phase 2 (scale near 0): speed_factor = 0.5 (2x slower)
-    # At end of curriculum (scale = 1): speed_factor = 1.0 (normal)
+    # SPEED CURRICULUM:
+    # Training starts at a visible but manageable sweep speed, then ramps toward
+    # faster disturbances. Each environment gets its own persistent speed profile.
     avg_scale = scale.mean().item() if scale.numel() > 0 else 0.0
-    speed_factor = 0.5 + 0.5 * avg_scale  # Ramps from 0.5 to 1.0
-    
-    # Base duration (at speed_factor=1.0, speed_multiplier=1.0): 2500 steps = 50s per pose
-    # During early training: 2500/0.5 = 5000 steps = 100s per pose (very slow!)
-    # During play (speed_multiplier=4.0): 2500/4 = 625 steps = 12.5s per pose
+
+    if scale_override is not None:
+        effective_speed_multiplier = float(speed_multiplier)
+    else:
+        if not hasattr(env, '_arm_speed_profiles'):
+            env._arm_speed_profiles = torch.rand(env.num_envs, device=env.device)
+        speed_profiles = env._arm_speed_profiles[env_ids]
+        env_speed_multiplier = min_speed_multiplier + (
+            max_speed_multiplier - min_speed_multiplier
+        ) * speed_profiles
+        effective_speed_multiplier = env_speed_multiplier * (0.5 + 0.5 * avg_scale)
+
+    # Base duration (at multiplier=1.0): 2500 steps = 50 s per pose.
+    # Example training range with defaults:
+    #   early curriculum: ~12.5 s to ~4.2 s per pose
+    #   late curriculum:  ~6.25 s to ~2.1 s per pose
     BASE_SEGMENT_DURATION = 2500
-    SEGMENT_DURATION = int(BASE_SEGMENT_DURATION / (speed_multiplier * speed_factor))
+    if isinstance(effective_speed_multiplier, torch.Tensor):
+        segment_duration = torch.clamp(
+            (BASE_SEGMENT_DURATION / effective_speed_multiplier).to(torch.long),
+            min=1,
+        )
+    else:
+        segment_duration = max(1, int(BASE_SEGMENT_DURATION / effective_speed_multiplier))
     
     # === PERSISTENT RANDOM STATE ===
     # Created once per session. Ensures:
@@ -216,7 +231,8 @@ def extreme_arm_sweep(
     if not hasattr(env, '_arm_sweep_state'):
         env._arm_sweep_state = {
             'time_offsets': torch.randint(
-                0, SEGMENT_DURATION * num_poses,
+                0,
+                BASE_SEGMENT_DURATION * num_poses,
                 (env.num_envs,), device=env.device
             ),
         }
@@ -227,12 +243,15 @@ def extreme_arm_sweep(
     adjusted_steps = current_step + time_offsets
     
     # Which transition segment we're in
-    segment_idx = adjusted_steps // SEGMENT_DURATION
-    
-    # Progress within current segment - ALWAYS 0→1 over the full segment (continuous motion!)
-    steps_in_segment = adjusted_steps % SEGMENT_DURATION
-    progress = steps_in_segment.float() / float(SEGMENT_DURATION)
-    
+    if isinstance(segment_duration, torch.Tensor):
+        segment_idx = torch.div(adjusted_steps, segment_duration, rounding_mode='floor')
+        steps_in_segment = torch.remainder(adjusted_steps, segment_duration)
+        progress = steps_in_segment.float() / segment_duration.float()
+    else:
+        segment_idx = adjusted_steps // segment_duration
+        steps_in_segment = adjusted_steps % segment_duration
+        progress = steps_in_segment.float() / float(segment_duration)
+
     # Smooth interpolation using cosine ease-in-out
     smooth_progress = (1.0 - torch.cos(progress * math.pi)) / 2.0
     
